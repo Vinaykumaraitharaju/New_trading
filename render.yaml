@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: reaction-alpha
+    runtime: python
+    plan: free
+    region: singapore
+    buildCommand: pip install --cache-dir .render/pip-cache -r requirements.txt
+    startCommand: uvicorn reaction_alpha_main:app --host 0.0.0.0 --port $PORT --ws wsproto
+    healthCheckPath: /api/health
+    autoDeployTrigger: commit
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.9
+      - key: REACTION_ALPHA_SIMULATED
+        value: "true"
+      - key: REACTION_ALPHA_SIM_ALWAYS_OPEN
+        value: "true"
+      - key: REACTION_ALPHA_PAPER_DB
+        value: /tmp/reaction_alpha_paper_trades.db

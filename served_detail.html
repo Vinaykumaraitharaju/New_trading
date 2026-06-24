@@ -1,0 +1,436 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Signal Detail</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700;800&family=Orbitron:wght@500;700;800&family=Sora:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      color-scheme: dark;
+      --gold: #D4AF37;
+      --bull: #00FFB2;
+      --bear: #FF4D6D;
+      --text: #F7F8FB;
+      --muted: #8D97A8;
+      --line: rgba(255,255,255,0.08);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: "Sora", system-ui, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% 15%, rgba(66,216,255,0.10), transparent 24%),
+        radial-gradient(circle at 88% 10%, rgba(145,94,255,0.10), transparent 24%),
+        radial-gradient(circle at 45% 100%, rgba(212,175,55,0.08), transparent 32%),
+        linear-gradient(180deg, #0b0f16 0%, #070a10 48%, #04060a 100%);
+      min-height: 100vh;
+    }
+    .wrap { max-width: 1180px; margin: 0 auto; padding: 24px; display: grid; gap: 18px; }
+    .panel {
+      position: relative; overflow: hidden; border-radius: 20px; border: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(16,20,29,0.80), rgba(8,10,15,0.86));
+      box-shadow: 0 24px 70px rgba(0,0,0,0.38), inset 0 1px 0 rgba(255,255,255,0.04);
+      backdrop-filter: blur(22px); -webkit-backdrop-filter: blur(22px);
+    }
+    .back {
+      display: inline-flex; align-items: center; gap: 8px; width: fit-content;
+      padding: 10px 14px; border-radius: 999px; border: 1px solid var(--line);
+      color: var(--text); text-decoration: none; background: rgba(255,255,255,0.03);
+    }
+    .hero { padding: 24px; display: grid; gap: 16px; }
+    .head { display: flex; justify-content: space-between; gap: 16px; align-items: start; }
+    .eyebrow { font-size: 11px; letter-spacing: .28em; text-transform: uppercase; color: var(--muted); }
+    .badge {
+      display: inline-flex; align-items: center; padding: 10px 16px; border-radius: 999px; font-size: 11px; font-weight: 700;
+      letter-spacing: .18em; text-transform: uppercase; border: 1px solid var(--line); margin-top: 12px;
+    }
+    .bull { color: var(--bull); background: rgba(0,255,178,0.08); }
+    .bear { color: var(--bear); background: rgba(255,77,109,0.08); }
+    .neutral { color: var(--gold); background: rgba(212,175,55,0.08); }
+    .symbol { margin-top: 12px; font-family: "Orbitron", sans-serif; font-size: 56px; font-weight: 800; letter-spacing: -.05em; }
+    .subtitle { margin-top: 10px; color: #B4BECC; line-height: 1.75; max-width: 720px; }
+    .meta { display: grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap: 12px; }
+    .box, .meta-card { padding: 16px; border-radius: 16px; border: 1px solid var(--line); background: rgba(255,255,255,0.03); }
+    .k { font-size: 10px; text-transform: uppercase; letter-spacing: .22em; color: var(--muted); }
+    .v { margin-top: 10px; font-family: "JetBrains Mono", monospace; font-size: 26px; font-weight: 800; letter-spacing: -.04em; }
+    .grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }
+    .micro-grid { display: grid; grid-template-columns: 1.2fr .8fr; gap: 18px; }
+    .list { display: grid; gap: 10px; margin-top: 14px; }
+    .item { padding: 12px 14px; border-radius: 14px; background: rgba(255,255,255,0.03); border: 1px solid rgba(255,255,255,0.04); line-height: 1.65; color: #D2D9E4; }
+    .component-row { display: grid; grid-template-columns: 84px 1fr 42px; align-items: center; gap: 10px; margin-top: 10px; }
+    .component-track { height: 10px; border-radius: 999px; overflow: hidden; background: rgba(255,255,255,0.08); }
+    .component-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, rgba(212,175,55,0.55), rgba(66,216,255,0.85)); box-shadow: 0 0 16px rgba(212,175,55,0.18); }
+    .speed-pill { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px; border:1px solid rgba(255,255,255,0.08); background:linear-gradient(180deg, rgba(20,25,36,0.88), rgba(10,12,18,0.88)); font-size:12px; color:#D7DEEA; box-shadow: inset 0 0 0 1px rgba(255,255,255,0.02); }
+    .speed-pill .tag { letter-spacing:0.18em; text-transform:uppercase; color:#92A0B5; font-size:10px; }
+    .speed-pill .value { font-family:"JetBrains Mono", monospace; font-weight:700; color:#F6F8FC; }
+    .speed-pill.fast { border-color:rgba(0,255,178,0.18); box-shadow:0 0 18px rgba(0,255,178,0.08), inset 0 0 0 1px rgba(0,255,178,0.05); }
+    .speed-pill.fast .value { color:var(--bull); }
+    .speed-pill.moderate { border-color:rgba(66,216,255,0.16); box-shadow:0 0 18px rgba(66,216,255,0.08), inset 0 0 0 1px rgba(66,216,255,0.05); }
+    .speed-pill.moderate .value { color:var(--cyan); }
+    .speed-pill.slow { border-color:rgba(212,175,55,0.18); box-shadow:0 0 18px rgba(212,175,55,0.06), inset 0 0 0 1px rgba(212,175,55,0.04); }
+    .speed-pill.slow .value { color:var(--gold); }
+    .micro-chart { margin-top: 16px; min-height: 380px; border-radius: 16px; border: 1px solid rgba(255,255,255,0.05); background:
+      linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01)),
+      linear-gradient(180deg, rgba(66,216,255,0.05), transparent 45%);
+      padding: 14px; overflow: hidden; }
+    .chart-header { display:flex; flex-wrap:wrap; align-items:flex-start; justify-content:space-between; gap:12px; margin-bottom:12px; }
+    .chart-title { font-family:"Orbitron",sans-serif; font-size:22px; letter-spacing:-.04em; }
+    .chart-subtitle { margin-top:6px; color:#AEB8C8; font-size:13px; }
+    .ohlc-strip { display:flex; flex-wrap:wrap; gap:10px; justify-content:flex-end; }
+    .ohlc-pill { display:inline-flex; gap:8px; align-items:center; padding:8px 10px; border-radius:999px; border:1px solid rgba(255,255,255,0.06); background:rgba(255,255,255,0.03); font-family:"JetBrains Mono",monospace; font-size:12px; }
+    .ohlc-pill span:first-child { color:#8D97A8; }
+    .chart-shell { position: relative; height: 330px; border-radius: 14px; overflow: hidden; background:
+      linear-gradient(180deg, rgba(10,14,20,0.88), rgba(8,11,16,0.94)); }
+    .chart-shell svg { display: block; width: 100%; height: 100%; }
+    .chart-toolbar { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:12px; margin-top:14px; }
+    .timeframes { display:flex; flex-wrap:wrap; gap:8px; }
+    .tf-btn {
+      display:inline-flex; align-items:center; justify-content:center; min-width:52px; padding:8px 12px; border-radius:999px;
+      border:1px solid rgba(255,255,255,0.08); background:rgba(255,255,255,0.03); color:#D3DBE7; font:inherit;
+      font-size:12px; font-weight:700; letter-spacing:.08em; text-transform:uppercase; cursor:pointer;
+    }
+    .tf-btn.active { color:var(--gold); border-color:rgba(212,175,55,0.28); box-shadow:0 0 18px rgba(212,175,55,0.12); background:rgba(212,175,55,0.08); }
+    .tf-note { color:#AEB8C8; font-size:13px; line-height:1.7; }
+    .chart-legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 12px; }
+    .legend-item { display: inline-flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 999px; border: 1px solid rgba(255,255,255,0.06); background: rgba(255,255,255,0.03); font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: #C7D0DE; }
+    .legend-dot { width: 10px; height: 10px; border-radius: 999px; box-shadow: 0 0 12px currentColor; }
+    .quote-ribbon { display:flex; gap:10px; margin-top:10px; flex-wrap:wrap; }
+    .quote-box { min-width:136px; padding:10px 12px; border-radius:14px; border:1px solid rgba(255,255,255,0.06); font-family:"JetBrains Mono",monospace; background:rgba(255,255,255,0.03); }
+    .quote-box .label { font-size:10px; letter-spacing:.18em; color:#8D97A8; text-transform:uppercase; }
+    .quote-box .price { margin-top:6px; font-size:24px; font-weight:800; }
+    .micro-stat-grid { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-top: 16px; }
+    .micro-stat { padding: 14px; border-radius: 14px; border: 1px solid rgba(255,255,255,0.05); background: rgba(255,255,255,0.03); }
+    .micro-label { font-size: 10px; text-transform: uppercase; letter-spacing: .2em; color: var(--muted); }
+    .micro-value { margin-top: 8px; font-family: "JetBrains Mono", monospace; font-size: 22px; font-weight: 800; letter-spacing: -.04em; }
+    .micro-sub { margin-top: 6px; color: #AEB8C8; font-size: 13px; }
+    .empty { padding: 42px 24px; text-align: center; color: var(--muted); line-height: 1.8; }
+    @media (max-width: 900px) { .head, .grid, .micro-grid, .meta, .micro-stat-grid { grid-template-columns: 1fr; display: grid; } .symbol { font-size: 40px; } .micro-chart { min-height: 300px; } .chart-shell { height: 260px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <a class="back" id="backLink" href="/">? Back to dashboard</a>
+    <div id="app"></div>
+  </div>
+  <script>
+    const app = document.getElementById("app");
+    const symbol = 'RELIANCE';
+    const endpoint = '/api/demo/signals/RELIANCE';
+    document.getElementById("backLink").href = '/demo' || "/";
+    let selectedFrame = "1m";
+
+    function badgeTone(signal) {
+      if ((signal.signal || "").includes("BULLISH")) return "bull";
+      if ((signal.signal || "").includes("BEARISH") || signal.reaction === "REVERSAL") return "bear";
+      return "neutral";
+    }
+
+    function speedMetrics(signal) {
+      const speed = signal?.context?.speed || {};
+      const velocity15 = Number(speed.velocity_15s_bps || 0);
+      const velocity30 = Number(speed.velocity_30s_bps || 0);
+      let tone = "slow";
+      let label = "Building";
+      if (velocity15 >= 22 || velocity30 >= 38) {
+        tone = "fast";
+        label = "Fast";
+      } else if (velocity15 >= 14 || velocity30 >= 24) {
+        tone = "moderate";
+        label = "Active";
+      }
+      return { velocity15, velocity30, tone, label };
+    }
+
+    function speedPill(signal) {
+      const speed = speedMetrics(signal);
+      return `<div class="speed-pill ${speed.tone}"><span class="tag">Speed</span><span class="value">${speed.label} ${speed.velocity15.toFixed(1)} bps</span></div>`;
+    }
+
+    function buildPriceActionChart(chartData, signal, frame) {
+      const bars = Array.isArray(chartData?.[frame]) ? chartData[frame] : [];
+      if (!bars.length) {
+        return '<div class="empty" style="padding:24px 0;">Waiting for 1-second price action...</div>';
+      }
+      const width = 940;
+      const height = 330;
+      const padLeft = 56;
+      const padRight = 82;
+      const padTop = 16;
+      const padBottom = 28;
+      const plotWidth = width - padLeft - padRight;
+      const volumeHeight = 72;
+      const priceHeight = height - padTop - padBottom - volumeHeight - 16;
+      const volumeTop = padTop + priceHeight + 16;
+      const chartBars = bars.slice(-(frame === "1m" ? 90 : frame === "5m" ? 72 : frame === "15m" ? 60 : 48));
+      const latest = chartBars[chartBars.length - 1];
+      const levels = [signal.entry, signal.sl, signal.t1, signal.t2].map((v) => Number(v || 0)).filter((v) => v > 0);
+      const lows = chartBars.map((bar) => Number(bar.low || bar.close || 0)).concat(levels);
+      const highs = chartBars.map((bar) => Number(bar.high || bar.close || 0)).concat(levels);
+      const minLow = Math.min(...lows);
+      const maxHigh = Math.max(...highs);
+      const range = Math.max(maxHigh - minLow, 0.01);
+      const toY = (price) => padTop + ((maxHigh - price) / range) * priceHeight;
+      const candleGap = 3;
+      const candleWidth = Math.max(5, Math.min(14, (plotWidth / chartBars.length) - candleGap));
+      const xStep = plotWidth / chartBars.length;
+      const maxVolume = Math.max(...chartBars.map((bar) => Number(bar.volume || 0)), 1);
+
+      const grid = Array.from({ length: 5 }, (_, idx) => {
+        const y = padTop + (priceHeight / 4) * idx;
+        const price = maxHigh - (range / 4) * idx;
+        return `
+          <line x1="${padLeft}" y1="${y}" x2="${width - padRight}" y2="${y}" stroke="rgba(255,255,255,0.07)" stroke-dasharray="4 6" />
+          <text x="${width - padRight + 8}" y="${y + 4}" fill="rgba(180,190,204,0.88)" font-size="11" font-family="JetBrains Mono, monospace">${price.toFixed(2)}</text>
+        `;
+      }).join("");
+
+      const candles = chartBars.map((bar, idx) => {
+        const open = Number(bar.open || bar.close || 0);
+        const close = Number(bar.close || open);
+        const high = Number(bar.high || Math.max(open, close));
+        const low = Number(bar.low || Math.min(open, close));
+        const x = padLeft + idx * xStep + (xStep - candleWidth) / 2;
+        const centerX = x + candleWidth / 2;
+        const wickTop = toY(high);
+        const wickBottom = toY(low);
+        const bodyTop = toY(Math.max(open, close));
+        const bodyBottom = toY(Math.min(open, close));
+        const bodyHeight = Math.max(bodyBottom - bodyTop, 2);
+        const rising = close >= open;
+        const fill = rising ? "rgba(0,255,178,0.92)" : "rgba(255,77,109,0.92)";
+        const stroke = rising ? "rgba(66,216,255,0.65)" : "rgba(212,175,55,0.55)";
+        return `
+          <g>
+            <line x1="${centerX}" y1="${wickTop}" x2="${centerX}" y2="${wickBottom}" stroke="${stroke}" stroke-width="1.4" />
+            <rect x="${x}" y="${bodyTop}" width="${candleWidth}" height="${bodyHeight}" rx="2" fill="${fill}" stroke="${stroke}" stroke-width="1" />
+          </g>
+        `;
+      }).join("");
+
+      const volumes = chartBars.map((bar, idx) => {
+        const open = Number(bar.open || bar.close || 0);
+        const close = Number(bar.close || open);
+        const volume = Number(bar.volume || 0);
+        const x = padLeft + idx * xStep + (xStep - candleWidth) / 2;
+        const barHeight = Math.max((volume / maxVolume) * volumeHeight, 2);
+        const y = volumeTop + (volumeHeight - barHeight);
+        const fill = close >= open ? "rgba(0,255,178,0.52)" : "rgba(255,77,109,0.52)";
+        return `<rect x="${x}" y="${y}" width="${candleWidth}" height="${barHeight}" rx="2" fill="${fill}" />`;
+      }).join("");
+
+      const levelDefs = [
+        { label: "Entry", value: Number(signal.entry || 0), color: "#42D8FF" },
+        { label: "SL", value: Number(signal.sl || 0), color: "#FF4D6D" },
+        { label: "T1", value: Number(signal.t1 || 0), color: "#D4AF37" },
+        { label: "T2", value: Number(signal.t2 || 0), color: "#00FFB2" }
+      ].filter((item) => item.value > 0);
+
+      const levelLines = levelDefs.map((item) => {
+        const y = toY(item.value);
+        return `
+          <line x1="${padLeft}" y1="${y}" x2="${width - padRight}" y2="${y}" stroke="${item.color}" stroke-width="1.5" stroke-dasharray="7 6" opacity="0.9" />
+          <text x="${width - padRight + 8}" y="${Math.max(12, y - 6)}" fill="${item.color}" font-size="10" font-family="JetBrains Mono, monospace">${item.label}</text>
+        `;
+      }).join("");
+
+      const lastClose = Number(latest.close || latest.open || 0);
+      const priceLineY = toY(lastClose);
+      const lastTone = lastClose >= Number(latest.open || lastClose) ? "#00FFB2" : "#FF4D6D";
+      const priceLine = `
+        <line x1="${padLeft}" y1="${priceLineY}" x2="${width - padRight}" y2="${priceLineY}" stroke="${lastTone}" stroke-width="1.2" stroke-dasharray="3 5" opacity="0.85" />
+        <rect x="${width - padRight + 2}" y="${priceLineY - 11}" width="76" height="22" rx="6" fill="${lastTone}" />
+        <text x="${width - padRight + 40}" y="${priceLineY + 4}" fill="#081018" font-size="11" text-anchor="middle" font-family="JetBrains Mono, monospace" font-weight="700">${lastClose.toFixed(2)}</text>
+      `;
+
+      const timeLabels = chartBars.filter((_, idx) => idx === 0 || idx === Math.floor(chartBars.length / 2) || idx === chartBars.length - 1).map((bar, idx, arr) => {
+        const actualIndex = chartBars.indexOf(bar);
+        const x = padLeft + actualIndex * xStep + xStep / 2;
+        const raw = String(bar.timestamp || '').split('T')[1] || '';
+        const stamp = raw.slice(0, 8);
+        return `<text x="${x}" y="${height - 8}" fill="rgba(141,151,168,0.92)" font-size="10" text-anchor="middle" font-family="JetBrains Mono, monospace">${stamp}</text>`;
+      }).join("");
+
+      const legend = `
+        <div class="chart-header">
+          <div>
+            <div class="chart-title">${signal.stock} Intraday Chart</div>
+            <div class="chart-subtitle">${frame} candles, live session context, trade levels and volume</div>
+          </div>
+          <div class="ohlc-strip">
+            <div class="ohlc-pill"><span>O</span><strong>${Number(latest.open || 0).toFixed(2)}</strong></div>
+            <div class="ohlc-pill"><span>H</span><strong>${Number(latest.high || 0).toFixed(2)}</strong></div>
+            <div class="ohlc-pill"><span>L</span><strong>${Number(latest.low || 0).toFixed(2)}</strong></div>
+            <div class="ohlc-pill"><span>C</span><strong style="color:${lastTone};">${lastClose.toFixed(2)}</strong></div>
+          </div>
+        </div>
+        <div class="chart-toolbar">
+          <div class="timeframes">
+            ${["1m","5m","15m","1h"].map((tf) => `<button class="tf-btn ${tf === frame ? "active" : ""}" data-frame="${tf}">${tf}</button>`).join("")}
+          </div>
+          <div class="tf-note">${bars.length} observed ${frame} candles from today only. This chart grows as the engine sees more of the session.</div>
+        </div>
+        <div class="quote-ribbon">
+          <div class="quote-box"><div class="label">Entry</div><div class="price" style="color:#42D8FF;">${Number(signal.entry || 0).toFixed(2)}</div></div>
+          <div class="quote-box"><div class="label">Stop</div><div class="price" style="color:#FF4D6D;">${Number(signal.sl || 0).toFixed(2)}</div></div>
+          <div class="quote-box"><div class="label">Target 1</div><div class="price" style="color:#D4AF37;">${Number(signal.t1 || 0).toFixed(2)}</div></div>
+          <div class="quote-box"><div class="label">Target 2</div><div class="price" style="color:#00FFB2;">${Number(signal.t2 || 0).toFixed(2)}</div></div>
+        </div>
+        <div class="chart-legend">
+          <div class="legend-item"><span class="legend-dot" style="color:#42D8FF; background:#42D8FF;"></span>Entry</div>
+          <div class="legend-item"><span class="legend-dot" style="color:#FF4D6D; background:#FF4D6D;"></span>Stop Loss</div>
+          <div class="legend-item"><span class="legend-dot" style="color:#D4AF37; background:#D4AF37;"></span>Target 1</div>
+          <div class="legend-item"><span class="legend-dot" style="color:#00FFB2; background:#00FFB2;"></span>Target 2</div>
+          <div class="legend-item"><span class="legend-dot" style="color:#6EF7D5; background:rgba(0,255,178,0.52);"></span>Volume</div>
+        </div>
+      `;
+
+      return `
+        <div class="chart-shell">
+          <svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" role="img" aria-label="Live 1-second chart">
+            <defs>
+              <linearGradient id="chartFillTop" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="0%" stop-color="rgba(66,216,255,0.12)" />
+                <stop offset="100%" stop-color="rgba(66,216,255,0)" />
+              </linearGradient>
+            </defs>
+            <rect x="${padLeft}" y="${padTop}" width="${plotWidth}" height="${priceHeight}" rx="14" fill="rgba(255,255,255,0.015)" />
+            <rect x="${padLeft}" y="${volumeTop}" width="${plotWidth}" height="${volumeHeight}" rx="10" fill="rgba(255,255,255,0.015)" />
+            ${grid}
+            ${levelLines}
+            ${priceLine}
+            ${candles}
+            ${volumes}
+            <text x="${padLeft}" y="${volumeTop - 4}" fill="rgba(141,151,168,0.92)" font-size="10" font-family="JetBrains Mono, monospace">Volume</text>
+            ${timeLabels}
+          </svg>
+        </div>
+        ${legend}
+      `;
+    }
+
+    function render(signal) {
+      if (!signal || signal.state === "NOT_ACTIVE") {
+        app.innerHTML = `<section class="panel empty"><div class="eyebrow">Selected Stock</div><div style="margin-top:12px; font-family:'Orbitron',sans-serif; font-size:32px;">${symbol}</div><div style="margin-top:12px;">No active high-conviction signal for this stock right now. This page tracks this symbol only and updates live when it qualifies.</div></section>`;
+        return;
+      }
+
+      const reasons = (signal.reason || []).map((item) => `<div class="item">${item}</div>`).join("");
+      const components = Object.entries(signal.components || {}).map(([name, score]) => {
+        const width = Math.max(0, Math.min(100, (Math.max(Number(score), 0) / 6) * 100));
+        return `<div class="component-row"><div class="k" style="font-size:11px;">${name}</div><div class="component-track"><div class="component-fill" style="width:${width}%;"></div></div><div class="v" style="margin:0; font-size:16px; text-align:right;">${score}</div></div>`;
+      }).join("");
+      const bars = Array.isArray(signal.price_action_1s) ? signal.price_action_1s : [];
+      const firstPrice = bars.length ? Number(bars[0].open || bars[0].close || signal.last_price || signal.entry || 0) : Number(signal.last_price || signal.entry || 0);
+      const lastPrice = Number(signal.last_price || signal.entry || 0);
+      const microMove = lastPrice - firstPrice;
+      const microPct = firstPrice > 0 ? (microMove / firstPrice) * 100 : 0;
+      const moveClass = microMove > 0 ? "bull" : microMove < 0 ? "bear" : "neutral";
+      const chart = buildPriceActionChart(signal.chart_data || {}, signal, selectedFrame);
+      const liveBars = bars.length;
+
+      app.innerHTML = `
+        <section class="panel hero">
+          <div class="head">
+            <div>
+              <div class="eyebrow">Single Stock Live Detail</div>
+              <div class="badge ${badgeTone(signal)}">${signal.signal}</div>
+              <div class="symbol">${signal.stock}</div>
+              <div class="subtitle">${signal.event} -> ${signal.reaction} -> ${signal.expected_move}</div>
+              <div style="margin-top:14px;">${speedPill(signal)}</div>
+            </div>
+            <div class="box" style="min-width:220px;">
+              <div class="k">Last Update</div>
+              <div class="v" style="font-size:22px;">${new Date(signal.updated_at).toLocaleTimeString()}</div>
+              <div style="margin-top:8px; color:var(--gold); font-weight:700;">${signal.confidence} confidence</div>
+              <div style="margin-top:10px; color:#AEB8C8; line-height:1.7;">${signal.setup_type || "EVENT_REACTION"} | ${signal.regime || "BALANCED"}</div>
+            </div>
+          </div>
+          <div class="meta">
+            <div class="meta-card"><div class="k">Trend</div><div class="v">${signal.trend}</div></div>
+            <div class="meta-card"><div class="k">Score</div><div class="v">${signal.score}</div></div>
+            <div class="meta-card"><div class="k">Entry Trigger</div><div class="v">${Number(signal.entry).toFixed(2)}</div></div>
+            <div class="meta-card"><div class="k">Stop Loss</div><div class="v">${Number(signal.sl).toFixed(2)}</div></div>
+            <div class="meta-card"><div class="k">Target 1</div><div class="v">${Number(signal.t1).toFixed(2)}</div></div>
+            <div class="meta-card"><div class="k">Target 2</div><div class="v">${Number(signal.t2).toFixed(2)}</div></div>
+            <div class="meta-card"><div class="k">Reaction</div><div class="v">${signal.reaction}</div></div>
+            <div class="meta-card"><div class="k">Trade State</div><div class="v">${signal.state || "READY"}</div></div>
+            <div class="meta-card"><div class="k">Regime</div><div class="v">${signal.regime || "BALANCED"}</div></div>
+            <div class="meta-card"><div class="k">Runtime T1</div><div class="v">${signal.probability?.t1_hit_rate ?? "--"}%</div></div>
+            <div class="meta-card"><div class="k">Runtime T2</div><div class="v">${signal.probability?.t2_hit_rate ?? "--"}%</div></div>
+            <div class="meta-card"><div class="k">Samples</div><div class="v">${signal.probability?.sample_size ?? "--"}</div></div>
+          </div>
+        </section>
+        <section class="micro-grid">
+          <div class="panel box">
+            <div class="eyebrow">1 Second Price Action</div>
+            <div class="micro-chart">${chart}</div>
+            <div class="micro-stat-grid">
+              <div class="micro-stat">
+                <div class="micro-label">Last Price</div>
+                <div class="micro-value">${lastPrice.toFixed(2)}</div>
+                <div class="micro-sub">Selected symbol live tick read</div>
+              </div>
+              <div class="micro-stat">
+                <div class="micro-label">60s Move</div>
+                <div class="micro-value ${moveClass}">${microMove >= 0 ? "+" : ""}${microMove.toFixed(2)}</div>
+                <div class="micro-sub ${moveClass}">${microPct >= 0 ? "+" : ""}${microPct.toFixed(2)}%</div>
+              </div>
+              <div class="micro-stat">
+                <div class="micro-label">Tape Speed</div>
+                <div class="micro-value">${Number(signal.tape_speed || 0)}</div>
+                <div class="micro-sub">${liveBars} bars in current micro window</div>
+              </div>
+              <div class="micro-stat">
+                <div class="micro-label">Velocity 15s</div>
+                <div class="micro-value">${speedMetrics(signal).velocity15.toFixed(1)} bps</div>
+                <div class="micro-sub">${speedMetrics(signal).label} mover profile</div>
+              </div>
+            </div>
+          </div>
+          <div class="panel box">
+            <div class="eyebrow">Micro Read</div>
+            <div class="list">
+              <div class="item">This panel aggregates the latest tick stream into 1-second bars so you can see immediate displacement, pause, and acceleration in the selected stock.</div>
+              <div class="item">Use tape speed with the 60-second move to judge whether the setup is gaining participation or stalling near your entry trigger.</div>
+              <div class="item">Treat this as execution context, not prediction. A rising tape with clean hold around entry improves the odds of follow-through toward T1 first.</div>
+              <div class="item">Market context: sector ${signal.context?.sector || "Unknown"} | breadth ${signal.context?.market?.market_breadth ?? "--"}% | sector strength ${signal.context?.market?.sector_strength ?? "--"}% | aligned timeframes ${signal.context?.market?.aligned_timeframes ?? "--"}.</div>
+              <div class="item">Current runtime model for this setup: T1 ${signal.probability?.t1_hit_rate ?? "--"}%, T2 ${signal.probability?.t2_hit_rate ?? "--"}%, regime ${signal.regime || "BALANCED"}, basis ${signal.probability?.basis ?? "setup model"}.</div>
+            </div>
+          </div>
+        </section>
+        <section class="grid">
+          <div class="panel box"><div class="eyebrow">Trade Thesis</div><div class="list">${reasons}</div></div>
+          <div class="panel box"><div class="eyebrow">Component Breakdown</div><div style="margin-top:14px;">${components}</div></div>
+        </section>
+      `;
+    }
+
+    document.addEventListener("click", (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLElement)) return;
+      const frame = target.getAttribute("data-frame");
+      if (!frame || !["1m","5m","15m","1h"].includes(frame)) return;
+      selectedFrame = frame;
+      load();
+    });
+
+    async function load() {
+      try {
+        const res = await fetch(endpoint);
+        const data = await res.json();
+        render(data);
+      } catch {
+        app.innerHTML = '<section class="panel empty">Unable to load this stock detail right now.</section>';
+      }
+    }
+
+    load();
+    setInterval(load, 2000);
+  </script>
+</body>
+</html>
+

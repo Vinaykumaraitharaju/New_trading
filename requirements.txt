@@ -1,0 +1,12 @@
+pandas>=2.1.0
+numpy>=1.26.0
+yfinance>=0.2.40
+plotly>=5.22.0
+requests>=2.31.0
+tenacity>=8.2.3
+pytz>=2024.1
+python-dotenv==1.0.0
+fastapi>=0.115.0
+uvicorn>=0.30.6
+wsproto>=1.2.0
+git+https://github.com/Kotak-Neo/Kotak-neo-api-v2.git@v2.0.1#egg=neo_api_client
