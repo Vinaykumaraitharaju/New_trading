@@ -104,6 +104,9 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     .level span { display:block; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.13em; margin-bottom:4px; }
     ul { margin:8px 0 0; padding-left:18px; color:#c7d0df; line-height:1.5; }
     .empty { padding:24px; color:var(--muted); border:1px dashed var(--line); border-radius:14px; }
+    .live-strip { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--muted); font-size:12px; }
+    .pulse { width:10px; height:10px; border-radius:999px; background:var(--bull); box-shadow:0 0 0 0 rgba(0,255,178,.55); animation:pulse 1.4s infinite; }
+    @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(0,255,178,.55); } 70% { box-shadow:0 0 0 10px rgba(0,255,178,0); } 100% { box-shadow:0 0 0 0 rgba(0,255,178,0); } }
     @media (max-width: 1000px) { .grid, .card { grid-template-columns:1fr; } }
   </style>
 </head>
@@ -113,6 +116,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       <div>
         <h1>Pre-Trade Setup Scanner</h1>
         <div class="muted">Upcoming trades ranked by market context, sector strength, price structure, candles, volume, VWAP, risk/reward, and fakeout risk.</div>
+        <div class="live-strip"><span class="pulse"></span><span id="liveStatus">Live scan ready</span><span id="countdown"></span></div>
       </div>
       <div class="nav">
         <a class="btn" href="/">Dashboard</a>
@@ -140,9 +144,10 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     const fmt = (v) => Number(v || 0).toFixed(2);
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
     const list = (items) => (items || []).slice(0, 4).map((item) => `<li>${esc(item)}</li>`).join("");
-    const refreshEveryMs = 20000;
+    const refreshEveryMs = 6000;
     let inFlight = false;
     let lastUpdatedText = "Waiting for first scan";
+    let nextRefreshAt = 0;
     function labelClass(label) {
       const raw = String(label || "");
       if (raw.includes("READY")) return "good";
@@ -156,6 +161,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       try {
         const res = await fetch(`/api/pretrade/top${force ? "?force=true" : ""}`);
         const data = await res.json();
+        document.getElementById("liveStatus").textContent = data.status === "ok" ? `Scanning live on ${data.source || "market data"}` : "Scanner warming up";
         const market = data.market || {};
         document.getElementById("marketBias").textContent = `${market.bias || "-"} ${market.strength ? Math.round(market.strength) : ""}`;
         document.getElementById("marketDetail").textContent = market.explanation || data.message || "";
@@ -168,7 +174,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         document.getElementById("sectors").innerHTML = (data.sectors || []).map((s) => `<span class="pill ${String(s.bias).toLowerCase().includes("bull") ? "good" : String(s.bias).toLowerCase().includes("bear") ? "bad" : ""}">${esc(s.sector)} ${Math.round(s.score || 0)}</span>`).join("") || `<span class="pill">No sector read</span>`;
         const stats = data.stats || {};
         lastUpdatedText = data.generated_at ? `Updated ${data.generated_at.replace("T", " ")}` : lastUpdatedText;
-        document.getElementById("stats").textContent = `${stats.scanned || 0} scanned | ${stats.shortlisted || 0} shortlisted | ${stats.selected || 0} selected | ${stats.elapsed_ms || 0} ms | ${lastUpdatedText}`;
+        document.getElementById("stats").textContent = `${stats.scanned || 0} scanned | ${stats.shortlisted || 0} shortlisted | ${stats.selected || 0} ranked | ${stats.elapsed_ms || 0} ms | ${lastUpdatedText}`;
         const setups = data.setups || [];
         document.getElementById("setups").innerHTML = setups.map((s) => `
           <section class="card">
@@ -211,18 +217,24 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
           </section>
         `).join("") || `<div class="empty">${esc(data.message || "No clean pre-trade setup right now.")}</div>`;
       } catch (err) {
+        document.getElementById("liveStatus").textContent = "Scanner refresh failed, retrying";
         document.getElementById("setups").innerHTML = `<div class="empty">Scanner refresh failed. Trying again automatically.</div>`;
       } finally {
         inFlight = false;
+        nextRefreshAt = Date.now() + refreshEveryMs;
       }
     }
     document.getElementById("refreshBtn").addEventListener("click", () => load(true));
     load();
     setInterval(() => {
       if (document.visibilityState === "visible") {
-        load(true);
+        const remaining = Math.max(0, Math.ceil((nextRefreshAt - Date.now()) / 1000));
+        document.getElementById("countdown").textContent = remaining ? `Next scan in ${remaining}s` : "Scanning now";
+        if (!remaining) {
+          load(true);
+        }
       }
-    }, refreshEveryMs);
+    }, 1000);
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
         load(true);

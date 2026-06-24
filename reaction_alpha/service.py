@@ -17,6 +17,7 @@ from auth import build_router
 from data.kotak_neo_feed import KotakLiveTick
 from scanner.universe import load_universe
 from scanner_brain import ScannerBrainService
+from scanner_brain.core.models import FinalAssessment, ScanResult, ScanStats
 
 from .config import ReactionAlphaConfig, classify_setup_profile, setup_profile_min_score, setup_profile_score_adjustment
 from .engines import (
@@ -237,6 +238,96 @@ class ReactionAlphaService:
         market_frame = self._market_frame_from_store()
         return self._build_pretrade_payload(quotes=quotes, universe=universe, market_frame=market_frame, source="runtime store")
 
+    def _pretrade_all_assessments(
+        self,
+        *,
+        quotes: pd.DataFrame,
+        universe: pd.DataFrame,
+        market_frame: pd.DataFrame,
+    ) -> tuple[list[FinalAssessment], list[dict[str, str]], Any, Any, Any, dict[str, Any]]:
+        normalized = self._scanner._normalize_quotes(quotes, universe)
+        market = self._scanner.market_engine.evaluate(market_frame.copy() if market_frame is not None else pd.DataFrame(), normalized)
+        sectors = self._scanner.sector_engine.evaluate(normalized, universe)
+        market_context = self._scanner.market_context_engine.evaluate(market_frame.copy() if market_frame is not None else pd.DataFrame(), normalized, sectors)
+        shortlist, rejected = self._scanner.filter_engine.shortlist(normalized)
+        snapshots = {snapshot.symbol: snapshot for snapshot in self._scanner._snapshots(shortlist, universe)}
+        assessments: list[Any] = []
+        for snapshot in snapshots.values():
+            technical = self._scanner.technical_engine.evaluate(snapshot)
+            sector = sectors.get(snapshot.sector)
+            pattern = self._scanner.pattern_engine.evaluate(snapshot, technical, market, sector)
+            news = self._scanner.news_provider.assess(snapshot)
+            prediction = self._scanner.prediction_engine.evaluate(snapshot, market_context, sector, technical, pattern)
+            final = self._scanner.scoring_engine.grade(snapshot, market, sector, technical, pattern, news)
+            execution = self._scanner.execution_engine.evaluate(
+                snapshot,
+                market_context,
+                prediction,
+                technical,
+                stop_loss=final.stop_loss,
+                target1=final.target1,
+                target2=final.target2,
+                rr=final.rr,
+            )
+            final_payload = dict(final.__dict__)
+            adjusted_score = self._scanner._confidence_score(final.final_score, prediction, technical, sector)
+            adjusted_grade = self._scanner._grade_from_confidence(adjusted_score, prediction)
+            adjusted_decision = self._scanner._decision_from_confidence(adjusted_score, adjusted_grade, prediction, execution)
+            final_payload.update(
+                final_score=adjusted_score,
+                grade=adjusted_grade,
+                decision=adjusted_decision,
+                prediction_bias=prediction.bias,
+                prediction_strength=prediction.strength,
+                pre_breakout_status=prediction.status,
+                prediction_grade=prediction.grade,
+                breakout_probability=prediction.breakout_probability,
+                trap_risk=prediction.trap_risk,
+                structure_state=prediction.structure_state,
+                compression_state=prediction.compression_state,
+                pressure_state=prediction.pressure_state,
+                vwap_state=prediction.vwap_state,
+                volume_state=prediction.volume_state,
+                exhaustion_state=prediction.exhaustion_state,
+                level_tests=prediction.level_tests,
+                level_test_quality=prediction.level_test_quality,
+                time_quality=prediction.time_quality,
+                prediction_explanation=prediction.explanation,
+                key_level=prediction.key_level,
+                pressure_side=prediction.pressure_side,
+                ideal_scenario=prediction.ideal_scenario,
+                invalid_scenario=prediction.invalid_scenario,
+                preparation_signals=prediction.preparation_signals,
+                prediction_warnings=prediction.warnings,
+                execution_state=execution.state,
+                execution_grade=execution.grade,
+                execution_direction=execution.direction,
+                execution_entry_quality=execution.entry_quality,
+                avoid_reason=execution.avoid_reason,
+                execution_explanation=execution.explanation,
+                validation_factors=prediction.validation_factors,
+                contradictions=prediction.contradictions,
+                snapshot_mode=prediction.snapshot_mode,
+                market_bias=market_context.market_bias,
+                market_strength=market_context.market_strength,
+                risk_state=market_context.risk_state,
+                market_explanation=market_context.explanation,
+                sector=snapshot.sector,
+            )
+            final = self._scanner.weighted_scoring_engine.apply(
+                stock=snapshot,
+                final=FinalAssessment(**final_payload),
+                market=market_context,
+                sector=sector,
+                technical=technical,
+                pattern=pattern,
+                news=news,
+                prediction=prediction,
+                execution=execution,
+            )
+            assessments.append(final)
+        return assessments, rejected, market, sectors, market_context, snapshots
+
     def _market_frame_from_router(self) -> pd.DataFrame:
         if self._router is None:
             return pd.DataFrame()
@@ -344,18 +435,35 @@ class ReactionAlphaService:
                 "setups": [],
                 "watchlist": [],
                 "rejected": [],
-                "stats": {"scanned": 0, "selected": 0},
+                "stats": {"scanned": 0, "selected": 0, "elapsed_ms": 0.0},
             }
-        ranked, rejected, result = self._scanner.scan(
+        started = time.perf_counter()
+        assessments, rejected, market, sectors, market_context, snapshots = self._pretrade_all_assessments(
             quotes=quotes,
             universe=universe,
             market_frame=market_frame,
-            min_score=self.config.pretrade_min_score,
         )
+        ordered = sorted(assessments, key=self._scanner.final_selector_engine._ranking_key, reverse=True)
+        ranked_assessments = self._scanner.final_selector_engine._differentiate_ranked_list(ordered[: self.config.top_n])
+        synthetic_result = ScanResult(
+            setups=ranked_assessments,
+            rejected=rejected,
+            stats=ScanStats(
+                scanned=int(len(quotes.index)),
+                shortlisted=int(len(snapshots)),
+                validated=int(len(assessments)),
+                selected=int(len(ranked_assessments)),
+                elapsed_ms=round((time.perf_counter() - started) * 1000.0, 1),
+            ),
+            market=market,
+            sectors=sectors,
+            market_context=market_context,
+        )
+        ranked = self._scanner.output_engine.to_dataframe(synthetic_result, snapshots)
         setups = ranked.head(8).to_dict("records") if not ranked.empty else []
         for setup in setups:
             setup["scanner_label"] = self._pretrade_label(setup)
-        rejected_rows = rejected.head(20).to_dict("records") if not rejected.empty else []
+        rejected_rows = rejected[:20] if rejected else []
         sector_rows = sorted(
             [
                 {
@@ -365,37 +473,37 @@ class ReactionAlphaService:
                     "rank": item.rank,
                     "reasons": item.reasons[:3],
                 }
-                for sector, item in result.sectors.items()
+                for sector, item in synthetic_result.sectors.items()
             ],
             key=lambda item: item["rank"],
         )[:8]
-        market = result.market_context
+        market = synthetic_result.market_context
         market_payload = {
-            "bias": market.market_bias if market else result.market.bias.value,
-            "strength": round(market.market_strength, 1) if market else round(result.market.score, 1),
-            "risk_state": market.risk_state if market else result.market.risk_mood,
-            "regime": result.market.label,
-            "day_type": result.market.day_type,
-            "volatility": result.market.volatility_regime,
-            "explanation": market.explanation if market else result.market.explanation,
-            "reasons": (market.reasons if market else result.market.reasons)[:6],
+            "bias": market.market_bias if market else synthetic_result.market.bias.value,
+            "strength": round(market.market_strength, 1) if market else round(synthetic_result.market.score, 1),
+            "risk_state": market.risk_state if market else synthetic_result.market.risk_mood,
+            "regime": synthetic_result.market.label,
+            "day_type": synthetic_result.market.day_type,
+            "volatility": synthetic_result.market.volatility_regime,
+            "explanation": market.explanation if market else synthetic_result.market.explanation,
+            "reasons": (market.reasons if market else synthetic_result.market.reasons)[:6],
         }
         return {
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "source": source,
             "status": "ok",
-            "message": f"Scanned {result.stats.scanned} symbols and selected {len(setups)} pre-trade setups.",
+            "message": f"Scanned {synthetic_result.stats.scanned} symbols and ranked {len(setups)} live pre-trade candidates.",
             "market": market_payload,
             "sectors": sector_rows,
             "setups": setups,
             "watchlist": [item for item in setups if item.get("trade_status") in {"WAIT", "TRADE"}],
             "rejected": rejected_rows,
             "stats": {
-                "scanned": result.stats.scanned,
-                "shortlisted": result.stats.shortlisted,
-                "validated": result.stats.validated,
-                "selected": result.stats.selected,
-                "elapsed_ms": round(result.stats.elapsed_ms, 1),
+                "scanned": synthetic_result.stats.scanned,
+                "shortlisted": synthetic_result.stats.shortlisted,
+                "validated": synthetic_result.stats.validated,
+                "selected": synthetic_result.stats.selected,
+                "elapsed_ms": round(synthetic_result.stats.elapsed_ms, 1),
             },
         }
 
