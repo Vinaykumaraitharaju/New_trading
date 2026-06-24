@@ -96,6 +96,18 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     .pill.bad { color:var(--bear); background:rgba(255,77,109,.08); }
     .pill.gold { color:var(--gold); background:rgba(212,175,55,.08); }
     .setups { display:grid; gap:12px; }
+    .summary-grid { display:grid; grid-template-columns:repeat(5, minmax(0,1fr)); gap:10px; margin-top:14px; }
+    .summary-item { padding:12px 14px; border:1px solid var(--line); border-radius:12px; background:rgba(255,255,255,.03); }
+    .summary-item .k { font-size:10px; }
+    .summary-item .v { font-size:22px; margin-top:4px; }
+    .summary-item.good { border-color:rgba(0,255,178,.18); }
+    .summary-item.gold { border-color:rgba(212,175,55,.18); }
+    .summary-item.cyan { border-color:rgba(66,216,255,.18); }
+    .summary-item.bad { border-color:rgba(255,77,109,.18); }
+    .group { display:grid; gap:12px; }
+    .group-head { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; padding:2px 4px 0; }
+    .group-title { font-size:18px; font-weight:850; }
+    .group-count { font-size:12px; color:var(--muted); }
     .card { display:grid; grid-template-columns: minmax(180px, 1fr) 1.4fr 1fr; gap:14px; padding:16px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.035); }
     .sym { font-size:25px; font-weight:900; }
     .score { font-size:30px; font-weight:900; color:var(--gold); }
@@ -108,6 +120,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     .pulse { width:10px; height:10px; border-radius:999px; background:var(--bull); box-shadow:0 0 0 0 rgba(0,255,178,.55); animation:pulse 1.4s infinite; }
     @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(0,255,178,.55); } 70% { box-shadow:0 0 0 10px rgba(0,255,178,0); } 100% { box-shadow:0 0 0 0 rgba(0,255,178,0); } }
     @media (max-width: 1000px) { .grid, .card { grid-template-columns:1fr; } }
+    @media (max-width: 1100px) { .summary-grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
   </style>
 </head>
 <body>
@@ -117,6 +130,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         <h1>Pre-Trade Setup Scanner</h1>
         <div class="muted">Upcoming trades ranked by market context, sector strength, price structure, candles, volume, VWAP, risk/reward, and fakeout risk.</div>
         <div class="live-strip"><span class="pulse"></span><span id="liveStatus">Live scan ready</span><span id="countdown"></span></div>
+        <div class="summary-grid" id="summaryGrid"></div>
       </div>
       <div class="nav">
         <a class="btn" href="/">Dashboard</a>
@@ -148,11 +162,63 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     let inFlight = false;
     let lastUpdatedText = "Waiting for first scan";
     let nextRefreshAt = 0;
-    function labelClass(label) {
-      const raw = String(label || "");
-      if (raw.includes("READY")) return "good";
-      if (raw.includes("AVOID") || raw.includes("RISK") || raw.includes("LATE")) return "bad";
-      return "gold";
+    function bandClass(band) {
+      const raw = String(band || "").toLowerCase();
+      if (raw === "trade-ready") return "good";
+      if (raw === "near-trigger") return "gold";
+      if (raw === "high-edge watch") return "cyan";
+      if (raw === "avoid") return "bad";
+      return "";
+    }
+    function bandTitle(band) {
+      const raw = String(band || "").toLowerCase();
+      if (raw === "trade-ready") return "Trade Ready";
+      if (raw === "near-trigger") return "Near Trigger";
+      if (raw === "high-edge watch") return "High-Edge Watch";
+      if (raw === "avoid") return "Avoid";
+      return "Watchlist";
+    }
+    function renderCard(s) {
+      return `
+        <section class="card">
+          <div>
+            <div class="pill ${bandClass(s.scanner_band)}">${esc(s.scanner_label || bandTitle(s.scanner_band))}</div>
+            <div class="sym">${esc(s.symbol)}</div>
+            <div class="muted">${esc(s.name)} | ${esc(s.sector)}</div>
+            <div class="score">${Math.round(Number(s.final_selector_score || s.confidence || 0))}</div>
+            <div class="pill-row">
+              <span class="pill">${esc(s.trade_direction || s.direction)}</span>
+              <span class="pill">${esc(s.setup_type)}</span>
+              <span class="pill">${esc(s.pre_breakout_status)}</span>
+            </div>
+          </div>
+          <div>
+            <div class="k">Why This Is Forming</div>
+            <div class="muted">${esc(s.prediction_explanation || s.pre_trade_note || s.remarks)}</div>
+            <ul>${list(s.trader_logic || s.preparation_signals || s.reasons)}</ul>
+            <div class="k" style="margin-top:12px;">What Must Happen</div>
+            <ul>${list(s.activation_rules || [s.what_must_happen])}</ul>
+          </div>
+          <div>
+            <div class="levels">
+              <div class="level"><span>LTP</span>${fmt(s.ltp)}</div>
+              <div class="level"><span>VWAP</span>${fmt(s.vwap)}</div>
+              <div class="level"><span>Entry High</span>${fmt(s.entry_high)}</div>
+              <div class="level"><span>Entry Low</span>${fmt(s.entry_low)}</div>
+              <div class="level"><span>Stop</span>${fmt(s.stop_loss)}</div>
+              <div class="level"><span>Target 1</span>${fmt(s.target1)}</div>
+              <div class="level"><span>Target 2</span>${fmt(s.target2)}</div>
+              <div class="level"><span>R:R</span>${Number(s.rr || 0).toFixed(2)}</div>
+            </div>
+            <div class="pill-row">
+              <span class="pill">Volume ${esc(s.volume_state)}</span>
+              <span class="pill">VWAP ${esc(s.vwap_state)}</span>
+              <span class="pill">Trap ${esc(s.trap_risk)}</span>
+            </div>
+            <div class="muted" style="margin-top:10px;">Invalid: ${esc(s.invalid_scenario || s.invalidation_note)}</div>
+          </div>
+        </section>
+      `;
     }
     async function load(force = false) {
       if (inFlight) return;
@@ -176,46 +242,39 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         lastUpdatedText = data.generated_at ? `Updated ${data.generated_at.replace("T", " ")}` : lastUpdatedText;
         document.getElementById("stats").textContent = `${stats.scanned || 0} scanned | ${stats.shortlisted || 0} shortlisted | ${stats.selected || 0} ranked | ${stats.elapsed_ms || 0} ms | ${lastUpdatedText}`;
         const setups = data.setups || [];
-        document.getElementById("setups").innerHTML = setups.map((s) => `
-          <section class="card">
-            <div>
-              <div class="pill ${labelClass(s.scanner_label)}">${esc(s.scanner_label)}</div>
-              <div class="sym">${esc(s.symbol)}</div>
-              <div class="muted">${esc(s.name)} | ${esc(s.sector)}</div>
-              <div class="score">${Math.round(Number(s.final_selector_score || s.confidence || 0))}</div>
-              <div class="pill-row">
-                <span class="pill">${esc(s.trade_direction || s.direction)}</span>
-                <span class="pill">${esc(s.setup_type)}</span>
-                <span class="pill">${esc(s.pre_breakout_status)}</span>
+        const bands = data.bands || {};
+        const bandCounts = data.band_counts || {};
+        document.getElementById("summaryGrid").innerHTML = `
+          <div class="summary-item good"><div class="k">Trade Ready</div><div class="v">${bandCounts.trade_ready || 0}</div></div>
+          <div class="summary-item gold"><div class="k">Near Trigger</div><div class="v">${bandCounts.near_trigger || 0}</div></div>
+          <div class="summary-item cyan"><div class="k">High-Edge Watch</div><div class="v">${bandCounts.high_edge_watch || 0}</div></div>
+          <div class="summary-item"><div class="k">Watchlist</div><div class="v">${bandCounts.watchlist || 0}</div></div>
+          <div class="summary-item bad"><div class="k">Avoid</div><div class="v">${bandCounts.avoid || 0}</div></div>
+        `;
+        const orderedBands = [
+          ["trade_ready", "Trade Ready", "Best live candidates with cleanest edge and confirmation."],
+          ["near_trigger", "Near Trigger", "Very close to confirmation and worth watching with intent."],
+          ["high_edge_watch", "High-Edge Watch", "Strong structure, but still needs the right push."],
+          ["watchlist", "Watchlist", "Worth tracking, but not yet special enough to promote."],
+          ["avoid", "Avoid", "Choppy, extended, or trap-prone right now."],
+        ];
+        const rendered = orderedBands.map(([key, title, detail]) => {
+          const items = (bands[key] || []).slice();
+          if (!items.length) return "";
+          return `
+            <section class="group">
+              <div class="group-head">
+                <div>
+                  <div class="group-title">${esc(title)}</div>
+                  <div class="muted">${esc(detail)}</div>
+                </div>
+                <div class="group-count">${items.length} setup${items.length === 1 ? "" : "s"}</div>
               </div>
-            </div>
-            <div>
-              <div class="k">Why This Is Forming</div>
-              <div class="muted">${esc(s.prediction_explanation || s.pre_trade_note || s.remarks)}</div>
-              <ul>${list(s.trader_logic || s.preparation_signals || s.reasons)}</ul>
-              <div class="k" style="margin-top:12px;">What Must Happen</div>
-              <ul>${list(s.activation_rules || [s.what_must_happen])}</ul>
-            </div>
-            <div>
-              <div class="levels">
-                <div class="level"><span>LTP</span>${fmt(s.ltp)}</div>
-                <div class="level"><span>VWAP</span>${fmt(s.vwap)}</div>
-                <div class="level"><span>Entry High</span>${fmt(s.entry_high)}</div>
-                <div class="level"><span>Entry Low</span>${fmt(s.entry_low)}</div>
-                <div class="level"><span>Stop</span>${fmt(s.stop_loss)}</div>
-                <div class="level"><span>Target 1</span>${fmt(s.target1)}</div>
-                <div class="level"><span>Target 2</span>${fmt(s.target2)}</div>
-                <div class="level"><span>R:R</span>${Number(s.rr || 0).toFixed(2)}</div>
-              </div>
-              <div class="pill-row">
-                <span class="pill">Volume ${esc(s.volume_state)}</span>
-                <span class="pill">VWAP ${esc(s.vwap_state)}</span>
-                <span class="pill">Trap ${esc(s.trap_risk)}</span>
-              </div>
-              <div class="muted" style="margin-top:10px;">Invalid: ${esc(s.invalid_scenario || s.invalidation_note)}</div>
-            </div>
-          </section>
-        `).join("") || `<div class="empty">${esc(data.message || "No clean pre-trade setup right now.")}</div>`;
+              <div class="setups">${items.map(renderCard).join("")}</div>
+            </section>
+          `;
+        }).filter(Boolean).join("");
+        document.getElementById("setups").innerHTML = rendered || `<div class="empty">${esc(data.message || "No clean pre-trade setup right now.")}</div>`;
       } catch (err) {
         document.getElementById("liveStatus").textContent = "Scanner refresh failed, retrying";
         document.getElementById("setups").innerHTML = `<div class="empty">Scanner refresh failed. Trying again automatically.</div>`;
@@ -816,7 +875,7 @@ UI_HTML = """<!doctype html>
       color: #D5DCE7;
     }
     .thesis-item::before {
-      content: "•";
+      content: "â€¢";
       color: var(--gold);
       margin-right: 10px;
     }
@@ -1379,7 +1438,7 @@ UI_HTML = """<!doctype html>
         <section class="engine-strip">
           <div class="panel engine-tile">
             <div class="engine-title">Selection Style</div>
-            <div class="engine-value" style="color:var(--gold);">◆ Strict</div>
+            <div class="engine-value" style="color:var(--gold);">â—† Strict</div>
             <div class="engine-meta">Multi-factor filter with reaction-first confirmation and hard rejection of weak breakouts.</div>
           </div>
           <div class="panel engine-tile">
@@ -1429,7 +1488,7 @@ UI_HTML = """<!doctype html>
               ${engineStrip}
               ${paperStrip}
               <section class="panel empty-card">
-                <div class="empty-ring">⌁</div>
+                <div class="empty-ring">âŒ</div>
                 <div style="margin-top:18px; font-family:'Orbitron',sans-serif; font-size:30px; letter-spacing:-.04em;">No strong trades yet</div>
                 <div class="muted" style="margin-top:12px; max-width:560px; margin-inline:auto; line-height:1.8;">
                   Engine scanning for clean setups. Event quality, structure alignment, and reaction confirmation are still below the promotion threshold.
@@ -1709,7 +1768,7 @@ DETAIL_HTML = """<!doctype html>
 </head>
 <body>
   <div class="wrap">
-    <a class="back" id="backLink" href="/">← Back to dashboard</a>
+    <a class="back" id="backLink" href="/">â† Back to dashboard</a>
     <div id="app"></div>
   </div>
   <script>
@@ -2176,7 +2235,7 @@ PAPER_HTML = """<!doctype html>
 </head>
 <body>
   <div class="wrap">
-    <a class="back" id="backLink" href="/">← Back to dashboard</a>
+    <a class="back" id="backLink" href="/">â† Back to dashboard</a>
     <section class="panel">
       <div class="title">Paper Trade Journal</div>
       <div class="muted" style="margin-top:10px;">The engine now records its own signals as paper trades, waits for trigger entry, then tracks T1, T2, SL, expiry, and time exits so we can measure real hit rates.</div>
@@ -2258,11 +2317,11 @@ PAPER_HTML = """<!doctype html>
           <td>${Number(trade.target2 || 0).toFixed(2)}</td>
           <td class="delta-cell">
             <div class="delta-inline">
-              <div class="delta-chip"><span class="delta-label">E → T1</span><span class="delta-value">${diff(trade.entry_trigger, trade.target1).toFixed(2)}</span></div>
-              <div class="delta-chip"><span class="delta-label">E → T2</span><span class="delta-value">${diff(trade.entry_trigger, trade.target2).toFixed(2)}</span></div>
-              <div class="delta-chip"><span class="delta-label">T1 → T2</span><span class="delta-value">${diff(trade.target1, trade.target2).toFixed(2)}</span></div>
-              <div class="delta-chip"><span class="delta-label">E → SL</span><span class="delta-value">${diff(trade.entry_trigger, trade.stop_loss).toFixed(2)}</span></div>
-              <div class="delta-chip"><span class="delta-label">L → E</span><span class="delta-value">${trade.live_price == null ? "--" : diff(trade.live_price, trade.entry_trigger).toFixed(2)}</span></div>
+              <div class="delta-chip"><span class="delta-label">E â†’ T1</span><span class="delta-value">${diff(trade.entry_trigger, trade.target1).toFixed(2)}</span></div>
+              <div class="delta-chip"><span class="delta-label">E â†’ T2</span><span class="delta-value">${diff(trade.entry_trigger, trade.target2).toFixed(2)}</span></div>
+              <div class="delta-chip"><span class="delta-label">T1 â†’ T2</span><span class="delta-value">${diff(trade.target1, trade.target2).toFixed(2)}</span></div>
+              <div class="delta-chip"><span class="delta-label">E â†’ SL</span><span class="delta-value">${diff(trade.entry_trigger, trade.stop_loss).toFixed(2)}</span></div>
+              <div class="delta-chip"><span class="delta-label">L â†’ E</span><span class="delta-value">${trade.live_price == null ? "--" : diff(trade.live_price, trade.entry_trigger).toFixed(2)}</span></div>
             </div>
           </td>
           <td class="${Number(trade.pnl_points || 0) >= 0 ? "green" : "red"}">${Number(trade.pnl_points || 0).toFixed(2)}</td>
@@ -2447,7 +2506,7 @@ ANALYTICS_HTML = """<!doctype html>
 <body>
   <div class="wrap">
     <div class="nav-row">
-      <a class="nav-link" id="journalLink" href="/">← Back to journal</a>
+      <a class="nav-link" id="journalLink" href="/">â† Back to journal</a>
       <a class="nav-link" id="dashboardLink" href="/">Dashboard</a>
     </div>
     <section class="panel">

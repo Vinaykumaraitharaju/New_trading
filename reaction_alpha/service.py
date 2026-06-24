@@ -462,7 +462,25 @@ class ReactionAlphaService:
         ranked = self._scanner.output_engine.to_dataframe(synthetic_result, snapshots)
         setups = ranked.head(8).to_dict("records") if not ranked.empty else []
         for setup in setups:
+            setup["scanner_band"] = self._pretrade_band(setup)
             setup["scanner_label"] = self._pretrade_label(setup)
+        band_priority = {
+            "trade-ready": 0,
+            "near-trigger": 1,
+            "high-edge watch": 2,
+            "watchlist": 3,
+            "avoid": 4,
+        }
+        setups.sort(
+            key=lambda item: (
+                band_priority.get(str(item.get("scanner_band") or "").lower(), 9),
+                -safe_float(item.get("final_selector_score") or item.get("confidence") or 0.0),
+                str(item.get("symbol") or ""),
+            )
+        )
+        band_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        for setup in setups:
+            band_rows[str(setup.get("scanner_band") or "watchlist").lower()].append(setup)
         rejected_rows = rejected[:20] if rejected else []
         sector_rows = sorted(
             [
@@ -492,11 +510,34 @@ class ReactionAlphaService:
             "generated_at": datetime.now().isoformat(timespec="seconds"),
             "source": source,
             "status": "ok",
-            "message": f"Scanned {synthetic_result.stats.scanned} symbols and ranked {len(setups)} live pre-trade candidates.",
+            "message": (
+                f"Scanned {synthetic_result.stats.scanned} symbols and surfaced "
+                f"{len(band_rows.get('trade-ready', []))} trade-ready, "
+                f"{len(band_rows.get('near-trigger', []))} near-trigger, and "
+                f"{len(band_rows.get('high-edge watch', []))} high-edge watch setups."
+            ),
             "market": market_payload,
             "sectors": sector_rows,
             "setups": setups,
-            "watchlist": [item for item in setups if item.get("trade_status") in {"WAIT", "TRADE"}],
+            "watchlist": [
+                item
+                for item in setups
+                if str(item.get("scanner_band") or "").lower() in {"trade-ready", "near-trigger", "high-edge watch"}
+            ],
+            "bands": {
+                "trade_ready": band_rows.get("trade-ready", []),
+                "near_trigger": band_rows.get("near-trigger", []),
+                "high_edge_watch": band_rows.get("high-edge watch", []),
+                "watchlist": band_rows.get("watchlist", []),
+                "avoid": band_rows.get("avoid", []),
+            },
+            "band_counts": {
+                "trade_ready": len(band_rows.get("trade-ready", [])),
+                "near_trigger": len(band_rows.get("near-trigger", [])),
+                "high_edge_watch": len(band_rows.get("high-edge watch", [])),
+                "watchlist": len(band_rows.get("watchlist", [])),
+                "avoid": len(band_rows.get("avoid", [])),
+            },
             "rejected": rejected_rows,
             "stats": {
                 "scanned": synthetic_result.stats.scanned,
@@ -513,15 +554,48 @@ class ReactionAlphaService:
         grade = str(setup.get("prediction_grade") or "").upper()
         trap = str(setup.get("trap_risk") or "").upper()
         entry_type = str(setup.get("entry_type") or "").upper()
-        if status == "TRADE" and grade in {"A+", "A"}:
-            return "READY SOON"
+        band = str(setup.get("scanner_band") or "").lower()
+        if band == "trade-ready":
+            return "TRADE READY"
+        if band == "near-trigger":
+            return "NEAR TRIGGER"
+        if band == "high-edge watch":
+            return "HIGH-EDGE WATCH"
+        if band == "avoid":
+            return "AVOID"
         if entry_type == "CHASING" or trap == "HIGH":
             return "TOO LATE / FAKEOUT RISK"
+        if status == "TRADE" and grade in {"A+", "A"}:
+            return "TRADE READY"
         if status == "WAIT":
-            return "WAIT FOR TRIGGER"
+            return "WATCH FOR TRIGGER"
         if status == "AVOID":
             return "AVOID"
         return "WATCHLIST"
+
+    @staticmethod
+    def _pretrade_band(setup: dict[str, Any]) -> str:
+        status = str(setup.get("trade_status") or "").upper()
+        bucket = str(setup.get("selection_bucket") or "").upper()
+        grade = str(setup.get("prediction_grade") or "").upper()
+        trap = str(setup.get("trap_risk") or "").upper()
+        entry_type = str(setup.get("entry_type") or "").upper()
+        breakout = str(setup.get("pre_breakout_status") or "").upper()
+        score = safe_float(setup.get("final_selector_score") or setup.get("confidence") or 0.0)
+
+        if status == "AVOID" or trap == "HIGH" or entry_type == "CHASING":
+            return "avoid"
+        if bucket == "TRADE_READY" and status == "TRADE" and grade in {"A+", "A"} and score >= 78:
+            return "trade-ready"
+        if bucket == "NEAR_TRIGGER" or (status == "WAIT" and breakout == "NEAR_BREAKOUT" and score >= 68):
+            return "near-trigger"
+        if bucket == "EARLY_WATCH" or (score >= 58 and breakout in {"BUILDING", "NEAR_BREAKOUT"}):
+            return "high-edge watch"
+        if status == "TRADE":
+            return "trade-ready" if score >= 72 else "near-trigger"
+        if status == "WAIT":
+            return "watchlist"
+        return "watchlist"
 
     def submit_kotak_totp(self, totp_code: str) -> dict[str, Any]:
         code = str(totp_code or "").strip()
