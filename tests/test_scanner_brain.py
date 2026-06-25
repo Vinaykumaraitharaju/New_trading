@@ -5,7 +5,7 @@ import unittest
 import pandas as pd
 
 from scanner_brain.core.enums import Bias, EntryType, MarketStateLabel, Side
-from scanner_brain.config.scoring_profiles import ScoringProfile
+from scanner_brain.config.scoring_profiles import ScoringProfile, reaction_profile_for_stock
 from scanner_brain.core.models import MarketContext, MarketRegime, PatternAssessment, StockSnapshot, TechnicalAssessment
 from scanner_brain.engines.alignment_scoring_engine import AlignmentScoringEngine
 from scanner_brain.engines.prebreakout_prediction_engine import PreBreakoutPredictionEngine
@@ -108,6 +108,9 @@ class ScannerBrainServiceTest(unittest.TestCase):
         self.assertIn("final_selector_score", ranked.columns)
         self.assertIn("why_selected", ranked.columns)
         self.assertEqual(ranked.iloc[0]["symbol"], "RELIANCE")
+        self.assertEqual(ranked.iloc[0]["reaction_profile"], "Reliance / Multi-Factor Bellwether")
+        self.assertGreater(ranked.iloc[0]["adaptive_weights"]["news_events"], ScoringProfile().group_weights.news_events)
+        self.assertIn("news_events", ranked.iloc[0]["stock_sensitivities"])
         self.assertNotEqual(ranked.iloc[0]["selection_bucket"], "RISKY")
         self.assertTrue(any(item.get("symbol") == "TCS" for item in rejected.to_dict("records")))
         self.assertEqual(result.stats.scanned, 3)
@@ -403,6 +406,25 @@ class ScannerBrainServiceTest(unittest.TestCase):
         self.assertTrue(any("VWAP" in str(reason) or "extended" in str(reason) for reason in rejected.get("reason", pd.Series(dtype=str)).tolist()))
         self.assertLessEqual(len(ranked), 5)
         self.assertEqual(result.stats.selected, len(ranked))
+
+    def test_reaction_profile_accepts_per_stock_raw_override(self) -> None:
+        profile = reaction_profile_for_stock(
+            "CUSTOM",
+            "Unknown",
+            {
+                "reaction_profile": {
+                    "name": "Custom News Driven",
+                    "description": "Treat this stock as news-first.",
+                    "group_multipliers": {"news_events": 1.8, "liquidity_orderflow_proxy": 0.7},
+                    "sensitivities": {"news_events": 0.95, "liquidity_orderflow_proxy": 0.45},
+                }
+            },
+        )
+
+        self.assertEqual(profile.name, "Custom News Driven")
+        self.assertEqual(profile.group_multipliers["news_events"], 1.8)
+        self.assertEqual(profile.group_multipliers["liquidity_orderflow_proxy"], 0.7)
+        self.assertEqual(profile.sensitivities["news_events"], 0.95)
 
 
 if __name__ == "__main__":

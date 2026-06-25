@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+import unittest
 
 from reaction_alpha.config import ReactionAlphaConfig
-from reaction_alpha.models import TickData
+from reaction_alpha.engines.scoring_engine import UnifiedScoringEngine
+from reaction_alpha.models import ComponentScore, ReactionResult, StructureResult, TickData
 from reaction_alpha.paper_trade import PaperTradeBook, PendingTrigger
 from reaction_alpha.service import ReactionAlphaService
 
@@ -187,3 +189,29 @@ def test_choppy_pending_trigger_requires_acceptance_before_entry(tmp_path) -> No
     book._update_candidate(candidate, price=100.24, timestamp=now + timedelta(seconds=20))
     with book._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
+
+
+class AdaptiveLiveScoringTest(unittest.TestCase):
+    def test_live_scoring_applies_stock_reaction_profile(self) -> None:
+        score = UnifiedScoringEngine(elite_threshold=18, strong_threshold=12).evaluate(
+            reaction=ReactionResult("CONTINUATION", 4, ["reaction"], 100.0, 101.0, 99.0),
+            structure=StructureResult("Bullish", "HH_HL", 3, True, False, 101.0, 99.0, ["structure"]),
+            sr=ComponentScore("sr", 2, ["sr"]),
+            pattern=ComponentScore("pattern", 1, ["pattern"]),
+            volume=ComponentScore("volume", 5, ["volume"]),
+            orderflow=ComponentScore("orderflow", 2, ["orderflow"]),
+            vwap=ComponentScore("vwap", 2, ["vwap"]),
+            volatility=ComponentScore("volatility", 1, ["volatility"]),
+            speed=ComponentScore("speed", 2, ["speed"]),
+            market_context=ComponentScore("market", 5, ["market"]),
+            buildup=ComponentScore("buildup", 1, ["buildup"]),
+            fake_move_penalty=ComponentScore("fake_move", 0, []),
+            symbol="HDFCBANK",
+            sector="Bank",
+        )
+
+        self.assertIn("adaptive_profile", score.components)
+        self.assertTrue(score.reasons[0].startswith("Adaptive stock profile applied: HDFC Bank"))
+        self.assertGreater(score.components["market"], 5)
+        self.assertGreater(score.components["volume"], 5)
+        self.assertLess(score.components["reaction"], 4)

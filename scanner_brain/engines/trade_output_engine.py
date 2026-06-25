@@ -48,6 +48,10 @@ class TradeOutputEngine:
                     "major_passes": setup.major_passes,
                     "major_failures": setup.major_failures,
                     "factor_heatmap": setup.scorecard.factor_heatmap if setup.scorecard else {},
+                    "reaction_profile": setup.scorecard.reaction_profile if setup.scorecard else "Balanced",
+                    "reaction_profile_note": setup.scorecard.reaction_profile_note if setup.scorecard else "",
+                    "adaptive_weights": setup.scorecard.adaptive_weights if setup.scorecard else {},
+                    "stock_sensitivities": setup.scorecard.stock_sensitivities if setup.scorecard else {},
                     "group_scores": {
                         key: {
                             "score": value.score,
@@ -180,6 +184,8 @@ class TradeOutputEngine:
             f"Execution: {setup.execution_explanation or setup.entry_reason}",
             f"Sequence: {setup.structure_state}, {setup.pressure_state}, VWAP {setup.vwap_state}, volume {setup.volume_state}.",
         ]
+        if setup.scorecard and setup.scorecard.reaction_profile != "Balanced":
+            logic.append(f"Adaptive profile: {setup.scorecard.reaction_profile} -> {setup.scorecard.reaction_profile_note}")
         if setup.side == Side.LONG:
             logic.append(f"Long only if resistance breaks without stretching away from VWAP {vwap:.2f}.")
             logic.append(f"If price loses VWAP or {setup.stop_loss:.2f}, long thesis fails.")

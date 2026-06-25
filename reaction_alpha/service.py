@@ -1134,6 +1134,8 @@ class ReactionAlphaService:
             market_context=market_context,
             buildup=buildup,
             fake_move_penalty=fake_move,
+            symbol=state.symbol,
+            sector=self._sector_map.get(state.symbol.upper(), "Unknown"),
         )
         if speed.score <= self.config.speed_ignore_threshold:
             return None
@@ -1490,6 +1492,8 @@ class ReactionAlphaService:
             market_context=market_context,
             buildup=buildup,
             fake_move_penalty=fake_move,
+            symbol=state.symbol,
+            sector=self._sector_map.get(state.symbol.upper(), "Unknown"),
         )
         setup_type = self._classify_setup(active_event.event_type if active_event else "MONITORING", reaction.classification, structure, sr, pattern)
         regime_label = str(regime["label"])

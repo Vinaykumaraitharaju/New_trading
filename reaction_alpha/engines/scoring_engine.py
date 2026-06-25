@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from scanner_brain.config.scoring_profiles import adaptive_signal_components, reaction_profile_for_stock
+
 from ..models import ComponentScore, ReactionResult, StructureResult
 
 
@@ -33,6 +35,9 @@ class UnifiedScoringEngine:
         market_context: ComponentScore,
         buildup: ComponentScore,
         fake_move_penalty: ComponentScore,
+        symbol: str = "",
+        sector: str = "",
+        raw: dict | None = None,
     ) -> UnifiedScore:
         components = {
             "reaction": reaction.score,
@@ -48,7 +53,13 @@ class UnifiedScoringEngine:
             "buildup": buildup.score,
             "fake_move": fake_move_penalty.score,
         }
-        total = sum(components.values())
+        profile = reaction_profile_for_stock(symbol, sector, raw)
+        adjusted_components = adaptive_signal_components(components, profile)
+        total_float = sum(adjusted_components.values())
+        total = int(round(total_float))
+        output_components = {name: int(round(value)) for name, value in adjusted_components.items()}
+        if profile.name != "Balanced":
+            output_components["adaptive_profile"] = int(round(total_float - sum(components.values())))
         label = "IGNORE"
         if total >= self.elite_threshold:
             label = "ELITE"
@@ -68,4 +79,6 @@ class UnifiedScoringEngine:
             + buildup.reasons
             + fake_move_penalty.reasons
         )
-        return UnifiedScore(total=total, label=label, reasons=reasons, components=components)
+        if profile.name != "Balanced":
+            reasons = [f"Adaptive stock profile applied: {profile.name}"] + reasons
+        return UnifiedScore(total=total, label=label, reasons=reasons, components=output_components)

@@ -209,6 +209,10 @@ class WeightedScorecard:
     major_failures: list[str]
     group_scores: dict[str, FactorGroupScore]
     factor_heatmap: dict[str, float]
+    reaction_profile: str = "Balanced"
+    reaction_profile_note: str = ""
+    adaptive_weights: dict[str, float] = field(default_factory=dict)
+    stock_sensitivities: dict[str, float] = field(default_factory=dict)
     score_drift: float = 0.0
     signal_stability: str = "fresh"
     live_conviction_change: str = "new"

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Iterable
 
-from scanner_brain.config.scoring_profiles import ScoringProfile
+from scanner_brain.config.scoring_profiles import ScoringProfile, reaction_profile_for_stock, sensitivity_for_group
 from scanner_brain.core.enums import Bias, Grade, Side
 from scanner_brain.core.models import (
     ExecutionAssessment,
@@ -46,7 +46,7 @@ class MultiLayerScoringEngine:
         execution: ExecutionAssessment,
     ) -> FinalAssessment:
         groups = self._groups(stock, final, market, sector, technical, pattern, news, prediction, execution)
-        scorecard = self._scorecard(groups, final, prediction, execution)
+        scorecard = self._scorecard(groups, stock, final, prediction, execution)
         grade = self._grade(scorecard.final_score, scorecard.hard_blocks)
         return replace(
             final,
@@ -64,7 +64,10 @@ class MultiLayerScoringEngine:
             boosters=scorecard.boosters,
             major_passes=scorecard.major_passes,
             major_failures=scorecard.major_failures,
-            confidence_note=f"{scorecard.conviction_label}. Weighted scorecard: {scorecard.final_score:.1f}/100.",
+            confidence_note=(
+                f"{scorecard.conviction_label}. Weighted scorecard: {scorecard.final_score:.1f}/100. "
+                f"Adaptive profile: {scorecard.reaction_profile}."
+            ),
         )
 
     def _groups(
@@ -167,8 +170,16 @@ class MultiLayerScoringEngine:
             ],
         }
 
-    def _scorecard(self, groups: dict[str, list[FactorSignal]], final: FinalAssessment, prediction: PredictionAssessment, execution: ExecutionAssessment) -> WeightedScorecard:
-        weights = self.profile.group_weights.__dict__
+    def _scorecard(
+        self,
+        groups: dict[str, list[FactorSignal]],
+        stock: StockSnapshot,
+        final: FinalAssessment,
+        prediction: PredictionAssessment,
+        execution: ExecutionAssessment,
+    ) -> WeightedScorecard:
+        reaction_profile = reaction_profile_for_stock(stock.symbol, stock.sector, stock.raw)
+        weights = self._adaptive_group_weights(reaction_profile.group_multipliers)
         group_scores: dict[str, FactorGroupScore] = {}
         weighted_total = 0.0
         total_weight = sum(float(weight) for weight in weights.values()) or 1.0
@@ -181,6 +192,7 @@ class MultiLayerScoringEngine:
         for group, signals in groups.items():
             weight = float(weights.get(group, 0.0))
             raw = self._group_raw_score(signals)
+            raw = self._apply_group_sensitivity(raw, sensitivity_for_group(reaction_profile, group))
             positive += sum(1 for signal in signals if signal.rating > 0)
             negative += sum(1 for signal in signals if signal.rating < 0)
             neutral += sum(1 for signal in signals if signal.rating == 0)
@@ -223,6 +235,8 @@ class MultiLayerScoringEngine:
 
         conflict_score = negative + len(hard_blocks) * 2 + len(prediction.contradictions)
         grade_label = self._grade_label(score, hard_blocks)
+        if reaction_profile.name != "Balanced":
+            boosters.insert(0, f"Adaptive Profile: {reaction_profile.name}")
         return WeightedScorecard(
             final_score=round(score, 1),
             grade_label=grade_label,
@@ -239,7 +253,26 @@ class MultiLayerScoringEngine:
             major_failures=list(dict.fromkeys(major_failures))[:10],
             group_scores=group_scores,
             factor_heatmap={group: item.score for group, item in group_scores.items()},
+            reaction_profile=reaction_profile.name,
+            reaction_profile_note=reaction_profile.description,
+            adaptive_weights={group: round(float(weight), 4) for group, weight in weights.items()},
+            stock_sensitivities={group: round(float(value), 3) for group, value in reaction_profile.sensitivities.items()},
         )
+
+    def _adaptive_group_weights(self, multipliers: dict[str, float]) -> dict[str, float]:
+        base_weights = self.profile.group_weights.__dict__
+        return {
+            group: max(0.0, float(weight) * float(multipliers.get(group, 1.0)))
+            for group, weight in base_weights.items()
+        }
+
+    @staticmethod
+    def _apply_group_sensitivity(raw_score: float, sensitivity: float) -> float:
+        """Amplify or mute distance from neutral based on stock behavior."""
+
+        distance_from_neutral = raw_score - 50.0
+        adjusted = 50.0 + distance_from_neutral * sensitivity
+        return max(0.0, min(100.0, adjusted))
 
     @staticmethod
     def _signal(name: str, rating: int, reason: str, *, hard_block: bool = False) -> FactorSignal:
