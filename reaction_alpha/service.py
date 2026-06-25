@@ -443,7 +443,15 @@ class ReactionAlphaService:
             universe=universe,
             market_frame=market_frame,
         )
-        ordered = sorted(assessments, key=self._scanner.final_selector_engine._ranking_key, reverse=True)
+        scored_assessments = [
+            self._scanner.final_selector_engine._score_assessment(
+                item,
+                market_context=market_context,
+                sector=sectors.get(item.sector),
+            )
+            for item in assessments
+        ]
+        ordered = sorted(scored_assessments, key=self._scanner.final_selector_engine._ranking_key, reverse=True)
         ranked_assessments = self._scanner.final_selector_engine._differentiate_ranked_list(ordered[: self.config.top_n])
         synthetic_result = ScanResult(
             setups=ranked_assessments,

@@ -108,18 +108,37 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     .group-head { display:flex; align-items:flex-end; justify-content:space-between; gap:10px; padding:2px 4px 0; }
     .group-title { font-size:18px; font-weight:850; }
     .group-count { font-size:12px; color:var(--muted); }
-    .card { display:grid; grid-template-columns: minmax(180px, 1fr) 1.4fr 1fr; gap:14px; padding:16px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.035); }
+    .card { display:grid; grid-template-columns: minmax(180px, 1fr) 1.4fr 1fr; gap:14px; padding:16px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.035); cursor:pointer; text-align:left; transition:border-color .16s ease, background .16s ease, transform .16s ease; }
+    .card:hover, .card.active { border-color:rgba(212,175,55,.42); background:rgba(255,255,255,.055); transform:translateY(-1px); }
     .sym { font-size:25px; font-weight:900; }
     .score { font-size:30px; font-weight:900; color:var(--gold); }
+    .score-label { color:var(--muted); font-size:10px; letter-spacing:.14em; text-transform:uppercase; margin-top:10px; }
     .levels { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin-top:10px; }
     .level { padding:9px; border-radius:10px; background:rgba(255,255,255,.035); border:1px solid rgba(255,255,255,.06); }
     .level span { display:block; color:var(--muted); font-size:10px; text-transform:uppercase; letter-spacing:.13em; margin-bottom:4px; }
+    .detail-panel { position:fixed; inset:0; display:none; z-index:40; background:rgba(0,0,0,.56); padding:18px; overflow:auto; }
+    .detail-panel.open { display:block; }
+    .detail-shell { max-width:1280px; margin:0 auto; border:1px solid rgba(255,255,255,.12); border-radius:16px; background:linear-gradient(180deg, #111923, #070b10); box-shadow:0 30px 120px rgba(0,0,0,.55); }
+    .detail-head { display:flex; justify-content:space-between; gap:14px; padding:18px; border-bottom:1px solid var(--line); position:sticky; top:0; background:rgba(13,18,25,.94); backdrop-filter:blur(14px); z-index:2; }
+    .detail-title { font-size:30px; font-weight:900; }
+    .detail-body { display:grid; grid-template-columns: 1.08fr .92fr; gap:14px; padding:18px; }
+    .detail-section { border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.035); padding:14px; min-width:0; }
+    .detail-grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+    .detail-two { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+    .metric { padding:11px; border:1px solid rgba(255,255,255,.07); border-radius:12px; background:rgba(0,0,0,.18); min-width:0; }
+    .metric .value { margin-top:6px; font-size:19px; font-weight:800; overflow-wrap:anywhere; }
+    .observed-list { display:grid; gap:8px; margin-top:10px; }
+    .observed-item { width:100%; text-align:left; }
+    .mini-bars { display:grid; gap:8px; margin-top:10px; }
+    .bar-row { display:grid; grid-template-columns: 150px 1fr 54px; gap:8px; align-items:center; font-size:12px; color:#c7d0df; }
+    .bar-track { height:8px; border-radius:999px; background:rgba(255,255,255,.08); overflow:hidden; }
+    .bar-fill { height:100%; background:linear-gradient(90deg,var(--cyan),var(--gold)); }
     ul { margin:8px 0 0; padding-left:18px; color:#c7d0df; line-height:1.5; }
     .empty { padding:24px; color:var(--muted); border:1px dashed var(--line); border-radius:14px; }
     .live-strip { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--muted); font-size:12px; }
     .pulse { width:10px; height:10px; border-radius:999px; background:var(--bull); box-shadow:0 0 0 0 rgba(0,255,178,.55); animation:pulse 1.4s infinite; }
     @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(0,255,178,.55); } 70% { box-shadow:0 0 0 10px rgba(0,255,178,0); } 100% { box-shadow:0 0 0 0 rgba(0,255,178,0); } }
-    @media (max-width: 1000px) { .grid, .card { grid-template-columns:1fr; } }
+    @media (max-width: 1000px) { .grid, .card, .detail-body { grid-template-columns:1fr; } .detail-grid, .detail-two { grid-template-columns:1fr; } }
     @media (max-width: 1100px) { .summary-grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
   </style>
 </head>
@@ -150,18 +169,38 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         <div style="height:16px"></div>
         <div class="k">Scan Stats</div>
         <div class="muted" id="stats"></div>
+        <div style="height:16px"></div>
+        <div class="k">Observed Stocks</div>
+        <div class="muted">Clicked cards stay here until this page reloads.</div>
+        <div class="observed-list" id="observedList"><span class="pill">No observed stock yet</span></div>
       </aside>
       <main class="setups" id="setups"><div class="empty">Loading scanner...</div></main>
     </div>
   </div>
+  <section class="detail-panel" id="detailPanel" aria-hidden="true">
+    <div class="detail-shell">
+      <div class="detail-head">
+        <div>
+          <div class="k" id="detailBand">Setup Detail</div>
+          <div class="detail-title" id="detailTitle">Stock</div>
+          <div class="muted" id="detailSubtitle"></div>
+        </div>
+        <button class="btn" id="closeDetailBtn">Close</button>
+      </div>
+      <div class="detail-body" id="detailBody"></div>
+    </div>
+  </section>
   <script>
     const fmt = (v) => Number(v || 0).toFixed(2);
     const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
     const list = (items) => (items || []).slice(0, 4).map((item) => `<li>${esc(item)}</li>`).join("");
+    const unique = (items) => Array.from(new Set((items || []).filter(Boolean)));
     const refreshEveryMs = 6000;
     let inFlight = false;
     let lastUpdatedText = "Waiting for first scan";
     let nextRefreshAt = 0;
+    const setupMemory = new Map();
+    let selectedSymbol = "";
     function bandClass(band) {
       const raw = String(band || "").toLowerCase();
       if (raw === "trade-ready") return "good";
@@ -178,26 +217,67 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       if (raw === "avoid") return "Avoid";
       return "Watchlist";
     }
+    function allSetupsFromPayload(data) {
+      const bands = data.bands || {};
+      return [
+        ...(data.setups || []),
+        ...(bands.trade_ready || []),
+        ...(bands.near_trigger || []),
+        ...(bands.high_edge_watch || []),
+        ...(bands.watchlist || []),
+        ...(bands.avoid || []),
+      ];
+    }
+    function rememberSetups(items) {
+      allSetupsFromPayload({ setups: items }).forEach((setup) => {
+        if (setup && setup.symbol) setupMemory.set(String(setup.symbol).toUpperCase(), setup);
+      });
+      renderObservedList();
+    }
+    function signalWarnings(s) {
+      const missing = unique([
+        ...(s.missing_factors || []),
+        ...(s.prediction_warnings || []),
+        ...(s.contradictions || []),
+      ]);
+      if (String(s.volume_state || "").toUpperCase().includes("WEAK")) missing.unshift("Volume expansion is not confirmed yet");
+      if (String(s.trap_risk || "").toUpperCase() === "MEDIUM") missing.unshift("Trap risk is medium, wait for cleaner acceptance");
+      if (String(s.structure_state || "").toUpperCase().includes("CHOPPY")) missing.unshift("Structure is choppy, confirmation must be cleaner");
+      if (!s.news_context?.length && !String(s.reaction_profile_note || "").trim()) missing.push("No fresh news catalyst is attached to this scan");
+      return unique(missing).slice(0, 5);
+    }
+    function keyReasons(s) {
+      return unique([
+        ...(s.why_selected || []),
+        s.why_ranked_here,
+        s.prediction_explanation,
+      ]).slice(0, 4);
+    }
+    function cardScore(s) {
+      const score = Number(s.final_selector_score || s.confidence || s.final_score || 0);
+      return score > 0 ? Math.round(score) : esc(s.trade_status || "WATCH");
+    }
     function renderCard(s) {
       return `
-        <section class="card">
+        <section class="card ${selectedSymbol === String(s.symbol).toUpperCase() ? "active" : ""}" data-symbol="${esc(s.symbol)}" tabindex="0" role="button" aria-label="Open ${esc(s.symbol)} detail">
           <div>
             <div class="pill ${bandClass(s.scanner_band)}">${esc(s.scanner_label || bandTitle(s.scanner_band))}</div>
             <div class="sym">${esc(s.symbol)}</div>
             <div class="muted">${esc(s.name)} | ${esc(s.sector)}</div>
-            <div class="score">${Math.round(Number(s.final_selector_score || s.confidence || 0))}</div>
+            <div class="score-label">Selector Score</div>
+            <div class="score">${cardScore(s)}</div>
             <div class="pill-row">
               <span class="pill">${esc(s.trade_direction || s.direction)}</span>
               <span class="pill">${esc(s.setup_type)}</span>
               <span class="pill">${esc(s.pre_breakout_status)}</span>
+              <span class="pill gold">${esc(s.reaction_profile || "Balanced")}</span>
             </div>
           </div>
           <div>
-            <div class="k">Why This Is Forming</div>
-            <div class="muted">${esc(s.prediction_explanation || s.pre_trade_note || s.remarks)}</div>
-            <ul>${list(s.trader_logic || s.preparation_signals || s.reasons)}</ul>
-            <div class="k" style="margin-top:12px;">What Must Happen</div>
-            <ul>${list(s.activation_rules || [s.what_must_happen])}</ul>
+            <div class="k">Why Watching</div>
+            <ul>${list(keyReasons(s))}</ul>
+            <div class="k" style="margin-top:12px;">Missing Confirmation</div>
+            <ul>${list(signalWarnings(s))}</ul>
           </div>
           <div>
             <div class="levels">
@@ -215,10 +295,121 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
               <span class="pill">VWAP ${esc(s.vwap_state)}</span>
               <span class="pill">Trap ${esc(s.trap_risk)}</span>
             </div>
-            <div class="muted" style="margin-top:10px;">Invalid: ${esc(s.invalid_scenario || s.invalidation_note)}</div>
+            <div class="muted" style="margin-top:10px;">Click to inspect full stock detail.</div>
           </div>
         </section>
       `;
+    }
+    function metric(label, value) {
+      return `<div class="metric"><div class="k">${esc(label)}</div><div class="value">${esc(value ?? "-")}</div></div>`;
+    }
+    function detailList(title, items) {
+      const content = list(unique(items).slice(0, 8)) || `<li>No data attached</li>`;
+      return `<section class="detail-section"><div class="k">${esc(title)}</div><ul>${content}</ul></section>`;
+    }
+    function groupBars(groups) {
+      const entries = Object.entries(groups || {}).sort((a, b) => Number(b[1]?.weighted_points || 0) - Number(a[1]?.weighted_points || 0)).slice(0, 10);
+      if (!entries.length) return `<div class="muted">No scorecard group detail attached.</div>`;
+      return `<div class="mini-bars">${entries.map(([name, group]) => {
+        const score = Number(group.score || 0);
+        return `
+          <div class="bar-row">
+            <div>${esc(name.replaceAll("_", " "))}</div>
+            <div class="bar-track"><div class="bar-fill" style="width:${Math.max(0, Math.min(100, score))}%"></div></div>
+            <div>${Math.round(score)}</div>
+          </div>
+        `;
+      }).join("")}</div>`;
+    }
+    function openDetail(symbol) {
+      const key = String(symbol || "").toUpperCase();
+      const s = setupMemory.get(key);
+      if (!s) return;
+      selectedSymbol = key;
+      document.getElementById("detailBand").textContent = s.scanner_label || bandTitle(s.scanner_band);
+      document.getElementById("detailTitle").textContent = `${s.symbol} - ${Math.round(Number(s.final_selector_score || s.confidence || 0)) || "WATCH"}`;
+      document.getElementById("detailSubtitle").textContent = `${s.name || s.symbol} | ${s.sector || "Unknown"} | ${s.trade_direction || s.direction || "NEUTRAL"}`;
+      document.getElementById("detailBody").innerHTML = `
+        <div class="detail-section">
+          <div class="k">Decision Summary</div>
+          <div class="pill-row">
+            <span class="pill ${bandClass(s.scanner_band)}">${esc(s.scanner_label || bandTitle(s.scanner_band))}</span>
+            <span class="pill gold">${esc(s.reaction_profile || "Balanced Profile")}</span>
+            <span class="pill">Status ${esc(s.trade_status || s.execution_state || "WAIT")}</span>
+            <span class="pill">Trap ${esc(s.trap_risk)}</span>
+          </div>
+          <div class="muted" style="margin-top:12px;">${esc(s.reaction_profile_note || "Balanced stock profile: signals are judged evenly.")}</div>
+          <div class="detail-grid" style="margin-top:14px;">
+            ${metric("Selector Score", Math.round(Number(s.final_selector_score || s.confidence || 0)) || "Pending")}
+            ${metric("Prediction", `${s.prediction_grade || "-"} ${s.pre_breakout_status || ""}`)}
+            ${metric("Breakout Probability", s.breakout_probability)}
+            ${metric("Market Bias", `${s.market_bias || "-"} ${Math.round(Number(s.market_strength || 0)) || ""}`)}
+            ${metric("Risk State", s.risk_state)}
+            ${metric("R:R", Number(s.rr || 0).toFixed(2))}
+          </div>
+        </div>
+        <div class="detail-section">
+          <div class="k">Price And Levels</div>
+          <div class="detail-grid" style="margin-top:10px;">
+            ${metric("LTP", fmt(s.ltp))}
+            ${metric("Open", fmt(s.open))}
+            ${metric("VWAP", fmt(s.vwap))}
+            ${metric("Day High", fmt(s.day_high))}
+            ${metric("Day Low", fmt(s.day_low))}
+            ${metric("Prev Close", fmt(s.prev_close))}
+            ${metric("Entry High", fmt(s.entry_high))}
+            ${metric("Entry Low", fmt(s.entry_low))}
+            ${metric("Stop", fmt(s.stop_loss))}
+            ${metric("Target 1", fmt(s.target1))}
+            ${metric("Target 2", fmt(s.target2))}
+            ${metric("VWAP Distance", `${Number(s.vwap_distance_pct || 0).toFixed(2)}%`)}
+          </div>
+        </div>
+        ${detailList("Why Watching This Stock", keyReasons(s))}
+        ${detailList("What Is Missing", signalWarnings(s))}
+        ${detailList("When To Act", s.activation_rules || [s.what_must_happen])}
+        ${detailList("Invalidation / Risk", [s.invalid_scenario, s.invalidation_note, s.why_not_higher, ...(s.cautions || [])])}
+        <section class="detail-section">
+          <div class="k">Market Metrics</div>
+          <div class="detail-grid" style="margin-top:10px;">
+            ${metric("Volume State", s.volume_state)}
+            ${metric("Pressure", s.pressure_state)}
+            ${metric("VWAP State", s.vwap_state)}
+            ${metric("Structure", s.structure_state)}
+            ${metric("Compression", s.compression_state)}
+            ${metric("Exhaustion", s.exhaustion_state)}
+            ${metric("Level Tests", `${s.level_tests || 0} ${s.level_test_quality || ""}`)}
+            ${metric("Time Quality", s.time_quality)}
+            ${metric("Entry Quality", s.entry_quality)}
+          </div>
+        </section>
+        ${detailList("News / Catalyst Context", s.news_context?.length ? s.news_context : [s.reaction_profile_note, "No connected news catalyst was scored as primary in this scan."])}
+        ${detailList("Trader Logic", s.trader_logic || s.reasons)}
+        <section class="detail-section">
+          <div class="k">Scorecard Groups</div>
+          ${groupBars(s.group_scores)}
+        </section>
+        <section class="detail-section">
+          <div class="k">Adaptive Weights</div>
+          ${groupBars(Object.fromEntries(Object.entries(s.adaptive_weights || {}).map(([name, weight]) => [name, { score: Number(weight) * 100, weighted_points: Number(weight) }])) )}
+        </section>
+      `;
+      document.getElementById("detailPanel").classList.add("open");
+      document.getElementById("detailPanel").setAttribute("aria-hidden", "false");
+      renderObservedList();
+      document.querySelectorAll(".card").forEach((card) => card.classList.toggle("active", card.dataset.symbol?.toUpperCase() === key));
+    }
+    function closeDetail() {
+      selectedSymbol = "";
+      document.getElementById("detailPanel").classList.remove("open");
+      document.getElementById("detailPanel").setAttribute("aria-hidden", "true");
+      document.querySelectorAll(".card").forEach((card) => card.classList.remove("active"));
+    }
+    function renderObservedList() {
+      const items = Array.from(setupMemory.values()).slice(-8).reverse();
+      document.getElementById("observedList").innerHTML = items.length
+        ? items.map((s) => `<button class="btn observed-item" data-observed="${esc(s.symbol)}">${esc(s.symbol)} - ${Math.round(Number(s.final_selector_score || s.confidence || 0)) || "WATCH"}</button>`).join("")
+        : `<span class="pill">No observed stock yet</span>`;
     }
     async function load(force = false) {
       if (inFlight) return;
@@ -243,6 +434,10 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         document.getElementById("stats").textContent = `${stats.scanned || 0} scanned | ${stats.shortlisted || 0} shortlisted | ${stats.selected || 0} ranked | ${stats.elapsed_ms || 0} ms | ${lastUpdatedText}`;
         const setups = data.setups || [];
         const bands = data.bands || {};
+        allSetupsFromPayload(data).forEach((setup) => {
+          if (setup && setup.symbol) setupMemory.set(String(setup.symbol).toUpperCase(), setup);
+        });
+        renderObservedList();
         const bandCounts = data.band_counts || {};
         document.getElementById("summaryGrid").innerHTML = `
           <div class="summary-item good"><div class="k">Trade Ready</div><div class="v">${bandCounts.trade_ready || 0}</div></div>
@@ -275,6 +470,9 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
           `;
         }).filter(Boolean).join("");
         document.getElementById("setups").innerHTML = rendered || `<div class="empty">${esc(data.message || "No clean pre-trade setup right now.")}</div>`;
+        if (selectedSymbol && setupMemory.has(selectedSymbol)) {
+          openDetail(selectedSymbol);
+        }
       } catch (err) {
         document.getElementById("liveStatus").textContent = "Scanner refresh failed, retrying";
         document.getElementById("setups").innerHTML = `<div class="empty">Scanner refresh failed. Trying again automatically.</div>`;
@@ -284,6 +482,29 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       }
     }
     document.getElementById("refreshBtn").addEventListener("click", () => load(true));
+    document.getElementById("setups").addEventListener("click", (event) => {
+      const card = event.target.closest(".card");
+      if (card?.dataset?.symbol) openDetail(card.dataset.symbol);
+    });
+    document.getElementById("setups").addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      const card = event.target.closest(".card");
+      if (card?.dataset?.symbol) {
+        event.preventDefault();
+        openDetail(card.dataset.symbol);
+      }
+    });
+    document.getElementById("observedList").addEventListener("click", (event) => {
+      const item = event.target.closest("[data-observed]");
+      if (item?.dataset?.observed) openDetail(item.dataset.observed);
+    });
+    document.getElementById("closeDetailBtn").addEventListener("click", closeDetail);
+    document.getElementById("detailPanel").addEventListener("click", (event) => {
+      if (event.target.id === "detailPanel") closeDetail();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeDetail();
+    });
     load();
     setInterval(() => {
       if (document.visibilityState === "visible") {
