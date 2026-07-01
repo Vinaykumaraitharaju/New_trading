@@ -258,6 +258,10 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       const score = Number(s.final_selector_score || s.confidence || s.final_score || 0);
       return score > 0 ? Math.round(score) : esc(s.trade_status || "WATCH");
     }
+    function growwUrl(s) {
+      const query = encodeURIComponent(`${s.symbol || ""} ${s.name || ""}`.trim());
+      return `https://groww.in/search?query=${query}`;
+    }
     function renderCard(s) {
       return `
         <section class="card ${selectedSymbol === String(s.symbol).toUpperCase() ? "active" : ""}" data-symbol="${esc(s.symbol)}" tabindex="0" role="button" aria-label="Open ${esc(s.symbol)} detail">
@@ -343,6 +347,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
             <span class="pill gold">${esc(s.reaction_profile || "Balanced Profile")}</span>
             <span class="pill">Status ${esc(s.trade_status || s.execution_state || "WAIT")}</span>
             <span class="pill">Trap ${esc(s.trap_risk)}</span>
+            <a class="pill good" href="${growwUrl(s)}" target="_blank" rel="noopener noreferrer">View on Groww</a>
           </div>
           <div class="muted" style="margin-top:12px;">${esc(s.reaction_profile_note || "Balanced stock profile: signals are judged evenly.")}</div>
           <div class="detail-grid" style="margin-top:14px;">
