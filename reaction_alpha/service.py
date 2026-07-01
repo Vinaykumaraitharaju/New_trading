@@ -470,6 +470,7 @@ class ReactionAlphaService:
         ranked = self._scanner.output_engine.to_dataframe(synthetic_result, snapshots)
         setups = ranked.head(8).to_dict("records") if not ranked.empty else []
         for setup in setups:
+            self._enrich_pretrade_opportunity(setup)
             setup["scanner_band"] = self._pretrade_band(setup)
             setup["scanner_label"] = self._pretrade_label(setup)
         band_priority = {
@@ -482,7 +483,7 @@ class ReactionAlphaService:
         setups.sort(
             key=lambda item: (
                 band_priority.get(str(item.get("scanner_band") or "").lower(), 9),
-                -safe_float(item.get("final_selector_score") or item.get("confidence") or 0.0),
+                -safe_float(item.get("relative_opportunity_score") or item.get("final_selector_score") or item.get("confidence") or 0.0),
                 str(item.get("symbol") or ""),
             )
         )
@@ -555,6 +556,261 @@ class ReactionAlphaService:
                 "elapsed_ms": round(synthetic_result.stats.elapsed_ms, 1),
             },
         }
+
+    def _enrich_pretrade_opportunity(self, setup: dict[str, Any]) -> None:
+        side = str(setup.get("side") or setup.get("direction") or "").upper()
+        ltp = safe_float(setup.get("ltp"))
+        entry = safe_float(setup.get("entry_high") if side == "LONG" else setup.get("entry_low"))
+        target1 = safe_float(setup.get("target1"))
+        stop = safe_float(setup.get("stop_loss"))
+        if ltp <= 0:
+            return
+
+        direction = 1.0 if side != "SHORT" else -1.0
+        trigger_gap = direction * (entry - ltp)
+        target_gap = direction * (target1 - ltp)
+        stop_gap = direction * (ltp - stop)
+        trigger_pct = (trigger_gap / ltp) * 100.0 if entry > 0 else 99.0
+        target_pct = (target_gap / ltp) * 100.0 if target1 > 0 else 0.0
+        risk_pct = (stop_gap / ltp) * 100.0 if stop > 0 else 0.0
+
+        missing: list[str] = []
+        volume_state = str(setup.get("volume_state") or "").upper()
+        trap_risk = str(setup.get("trap_risk") or "").upper()
+        structure = str(setup.get("structure_state") or "").upper()
+        if "WEAK" in volume_state:
+            missing.append("Volume expansion before trigger")
+        if trap_risk in {"MEDIUM", "HIGH"}:
+            missing.append(f"Trap risk must reduce from {trap_risk.lower()}")
+        if "CHOPPY" in structure:
+            missing.append("Cleaner structure or acceptance near level")
+        if trigger_pct > 0.8:
+            missing.append("Price is still far from trigger")
+        if target_pct <= 0:
+            missing.append("Target has already been reached or crossed")
+
+        phase = "WAIT"
+        if target_pct <= 0:
+            phase = "TARGET_PASSED"
+        elif trigger_pct <= 0:
+            phase = "TRIGGERED"
+        elif trigger_pct <= 0.25 and target_pct >= risk_pct:
+            phase = "PRE_TRIGGER_READY"
+        elif trigger_pct <= 0.8:
+            phase = "BUILDING_BEFORE_TARGET"
+
+        setup["trigger_distance_pct"] = round(trigger_pct, 2)
+        setup["target1_distance_pct"] = round(target_pct, 2)
+        setup["risk_distance_pct"] = round(max(risk_pct, 0.0), 2)
+        setup["opportunity_phase"] = phase
+        intelligence = self._market_intelligence(setup, trigger_pct, target_pct, risk_pct)
+        missing.extend(intelligence["missing"])
+        setup.update({key: value for key, value in intelligence.items() if key != "missing"})
+        setup["missing_confirmation"] = list(dict.fromkeys(missing))[:8]
+        setup["target_ahead_note"] = (
+            f"{phase}: trigger {trigger_pct:.2f}% away, T1 {target_pct:.2f}% away, risk {max(risk_pct, 0.0):.2f}%."
+        )
+
+    def _market_intelligence(self, setup: dict[str, Any], trigger_pct: float, target_pct: float, risk_pct: float) -> dict[str, Any]:
+        pressure_state = str(setup.get("pressure_state") or "").upper()
+        volume_state = str(setup.get("volume_state") or "").upper()
+        vwap_state = str(setup.get("vwap_state") or "").upper()
+        trap_risk = str(setup.get("trap_risk") or "").upper()
+        structure = str(setup.get("structure_state") or "").upper()
+        compression = str(setup.get("compression_state") or "").upper()
+        sector = str(setup.get("sector") or "Unknown")
+        market_bias = str(setup.get("market_bias") or "neutral").lower()
+        direction = str(setup.get("side") or setup.get("direction") or "").upper()
+
+        demand_supply = 50
+        demand_supply += {"BUYER_PRESSURE": 18, "SELLER_PRESSURE": 18, "MOMENTUM": 22, "ABSORPTION": 16}.get(pressure_state, 0)
+        demand_supply += {"CONFIRMED": 15, "VOLUME_CONFIRMED": 15, "EXPANDING": 11, "BUILDING": 8, "DRY_COMPRESSION": 5, "WEAK": -12, "WEAK_VOLUME": -12}.get(volume_state, 0)
+        demand_supply += {"ABOVE_HOLD": 10, "BELOW_REJECT": 10, "VWAP_RECLAIMED": 8, "VWAP_CHOPPY": -8, "EXTENDED": -12}.get(vwap_state, 0)
+        demand_supply = max(0, min(100, demand_supply))
+
+        level_tests = int(safe_float(setup.get("level_tests")))
+        prebreakout_memory = 35
+        prebreakout_memory += min(level_tests, 4) * 10
+        prebreakout_memory += 16 if str(setup.get("level_test_quality") or "").upper() == "TIGHT" else 5 if level_tests >= 2 else 0
+        prebreakout_memory += {"TIGHT": 16, "MODERATE": 9}.get(compression, 0)
+        prebreakout_memory += 8 if volume_state in {"BUILDING", "EXPANDING", "CONFIRMED", "VOLUME_CONFIRMED"} else -8 if "WEAK" in volume_state else 0
+        prebreakout_memory = max(0, min(100, prebreakout_memory))
+
+        confirmation_quality = "REAL_ACCUMULATION"
+        missing: list[str] = []
+        if trap_risk == "HIGH":
+            confirmation_quality = "TRAP_SETUP"
+        elif str(setup.get("entry_type") or "").upper() == "CHASING" or str(setup.get("exhaustion_state") or "").upper() in {"EXTENDED", "OVEREXTENDED", "CHASE_RISK_HIGH"}:
+            confirmation_quality = "LATE_CHASING_MOVE"
+        elif "WEAK" in volume_state:
+            confirmation_quality = "LOW_VOLUME_BREAKOUT_RISK"
+        elif "CHOPPY" in structure:
+            confirmation_quality = "FAKE_BREAKOUT_RISK"
+        elif demand_supply >= 72 and prebreakout_memory >= 65 and trap_risk == "LOW":
+            confirmation_quality = "REAL_ACCUMULATION"
+
+        if demand_supply < 65:
+            missing.append("Demand/supply pressure must strengthen")
+        if prebreakout_memory < 60:
+            missing.append("More level memory or tighter repeated tests needed")
+        if confirmation_quality != "REAL_ACCUMULATION":
+            missing.append(f"Confirmation quality is {confirmation_quality.lower().replace('_', ' ')}")
+
+        sector_score = 50
+        if sector and sector != "Unknown":
+            sector_score += 8
+        if (direction == "LONG" and market_bias == "bullish") or (direction == "SHORT" and market_bias == "bearish"):
+            sector_score += 12
+        elif market_bias not in {"neutral", ""}:
+            sector_score -= 10
+        sector_score = max(0, min(100, sector_score))
+
+        catalyst_confidence = self._catalyst_confidence(setup)
+        target_probability = self._target_ahead_probability(
+            setup,
+            demand_supply=demand_supply,
+            prebreakout_memory=prebreakout_memory,
+            sector_score=sector_score,
+            catalyst_confidence=catalyst_confidence,
+            trigger_pct=trigger_pct,
+            target_pct=target_pct,
+            risk_pct=risk_pct,
+        )
+        relative_opportunity = self._relative_opportunity_score(
+            setup,
+            demand_supply=demand_supply,
+            prebreakout_memory=prebreakout_memory,
+            sector_score=sector_score,
+            target_probability=target_probability,
+            trigger_pct=trigger_pct,
+            target_pct=target_pct,
+            risk_pct=risk_pct,
+        )
+
+        learning = self._stock_learning_hint(setup)
+        return {
+            "demand_supply_score": round(demand_supply, 1),
+            "prebreakout_memory_score": round(prebreakout_memory, 1),
+            "confirmation_quality": confirmation_quality,
+            "sector_market_score": round(sector_score, 1),
+            "catalyst_confidence": round(catalyst_confidence, 1),
+            "target_ahead_probability": round(target_probability, 1),
+            "expected_time_to_t1": self._expected_time_to_t1(setup, target_pct),
+            "relative_opportunity_score": round(relative_opportunity, 1),
+            "learning_hint": learning,
+            "market_intelligence": [
+                f"Demand/supply {demand_supply:.0f}/100 from pressure {pressure_state}, volume {volume_state}, VWAP {vwap_state}.",
+                f"Pre-breakout memory {prebreakout_memory:.0f}/100 from {level_tests} tests, {compression} compression.",
+                f"Confirmation quality: {confirmation_quality.replace('_', ' ').title()}.",
+                f"Target-ahead probability {target_probability:.0f}/100; relative opportunity {relative_opportunity:.0f}/100.",
+                learning,
+            ],
+            "missing": missing,
+        }
+
+    @staticmethod
+    def _catalyst_confidence(setup: dict[str, Any]) -> float:
+        text = " ".join(str(item) for item in [
+            setup.get("reaction_profile_note", ""),
+            setup.get("remarks", ""),
+            *(setup.get("news_context") or []),
+            *(setup.get("reasons") or []),
+        ]).lower()
+        keywords = ("result", "earnings", "order", "approval", "management", "guidance", "regulatory", "deal", "policy", "commodity", "global", "news")
+        score = 30.0 + sum(8.0 for key in keywords if key in text)
+        if setup.get("reaction_profile") and setup.get("reaction_profile") != "Balanced":
+            score += 12.0
+        if setup.get("volume_state") in {"EXPANDING", "CONFIRMED", "VOLUME_CONFIRMED"}:
+            score += 10.0
+        return max(0.0, min(100.0, score))
+
+    @staticmethod
+    def _target_ahead_probability(
+        setup: dict[str, Any],
+        *,
+        demand_supply: float,
+        prebreakout_memory: float,
+        sector_score: float,
+        catalyst_confidence: float,
+        trigger_pct: float,
+        target_pct: float,
+        risk_pct: float,
+    ) -> float:
+        score = (
+            demand_supply * 0.30
+            + prebreakout_memory * 0.24
+            + safe_float(setup.get("final_selector_score")) * 0.16
+            + sector_score * 0.12
+            + catalyst_confidence * 0.08
+            + max(0.0, min(100.0, 100.0 - max(trigger_pct, 0.0) * 80.0)) * 0.10
+        )
+        if target_pct <= 0:
+            score -= 35.0
+        if risk_pct > target_pct and target_pct > 0:
+            score -= 15.0
+        if str(setup.get("trap_risk") or "").upper() == "MEDIUM":
+            score -= 8.0
+        elif str(setup.get("trap_risk") or "").upper() == "HIGH":
+            score -= 22.0
+        return max(0.0, min(100.0, score))
+
+    @staticmethod
+    def _relative_opportunity_score(
+        setup: dict[str, Any],
+        *,
+        demand_supply: float,
+        prebreakout_memory: float,
+        sector_score: float,
+        target_probability: float,
+        trigger_pct: float,
+        target_pct: float,
+        risk_pct: float,
+    ) -> float:
+        proximity = max(0.0, min(100.0, 100.0 - abs(trigger_pct) * 90.0))
+        rr_quality = max(0.0, min(100.0, (target_pct / max(risk_pct, 0.05)) * 45.0)) if target_pct > 0 else 0.0
+        clean_invalidation = 85.0 if setup.get("invalidation_note") else 40.0
+        trap_score = {"LOW": 90.0, "MEDIUM": 55.0, "HIGH": 10.0}.get(str(setup.get("trap_risk") or "").upper(), 45.0)
+        return (
+            target_probability * 0.26
+            + demand_supply * 0.20
+            + prebreakout_memory * 0.16
+            + proximity * 0.14
+            + rr_quality * 0.10
+            + trap_score * 0.08
+            + sector_score * 0.04
+            + clean_invalidation * 0.02
+        )
+
+    @staticmethod
+    def _expected_time_to_t1(setup: dict[str, Any], target_pct: float) -> str:
+        volume = str(setup.get("volume_state") or "").upper()
+        pressure = str(setup.get("pressure_state") or "").upper()
+        if target_pct <= 0:
+            return "Target already reached"
+        if target_pct <= 0.35 and volume in {"EXPANDING", "CONFIRMED", "VOLUME_CONFIRMED"}:
+            return "Fast if trigger confirms"
+        if pressure in {"MOMENTUM", "BUYER_PRESSURE", "SELLER_PRESSURE"} and target_pct <= 0.9:
+            return "Intraday watch"
+        return "Needs more buildup"
+
+    def _stock_learning_hint(self, setup: dict[str, Any]) -> str:
+        try:
+            guard = self.paper_trades.setup_risk_guard(
+                setup_type=str(setup.get("setup_type") or ""),
+                regime=str(setup.get("regime") or setup.get("market_bias") or ""),
+                direction=str(setup.get("trade_direction") or setup.get("direction") or ""),
+                session_date=self.paper_trades.session_date(),
+            )
+        except Exception:
+            guard = {}
+        entries = int(guard.get("entries", 0) or 0)
+        if entries <= 0:
+            return "Learning: no completed local history for this setup yet."
+        return (
+            "Learning: "
+            f"{entries} entries, SL rate {float(guard.get('sl_rate', 0.0) or 0.0):.0%}, "
+            f"expectancy {float(guard.get('expectancy_points', 0.0) or 0.0):.2f}."
+        )
 
     @staticmethod
     def _pretrade_label(setup: dict[str, Any]) -> str:

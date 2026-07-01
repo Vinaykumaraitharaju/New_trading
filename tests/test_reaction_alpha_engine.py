@@ -215,3 +215,38 @@ class AdaptiveLiveScoringTest(unittest.TestCase):
         self.assertGreater(score.components["market"], 5)
         self.assertGreater(score.components["volume"], 5)
         self.assertLess(score.components["reaction"], 4)
+
+    def test_pretrade_opportunity_intelligence_is_added(self) -> None:
+        service = _build_service()
+        setup = {
+            "symbol": "TEST",
+            "side": "LONG",
+            "ltp": 100.0,
+            "entry_high": 100.2,
+            "entry_low": 99.8,
+            "target1": 101.0,
+            "stop_loss": 99.4,
+            "pressure_state": "BUYER_PRESSURE",
+            "volume_state": "BUILDING",
+            "vwap_state": "ABOVE_HOLD",
+            "trap_risk": "LOW",
+            "structure_state": "HH_HL_BUILDING",
+            "compression_state": "TIGHT",
+            "level_tests": 3,
+            "level_test_quality": "TIGHT",
+            "final_selector_score": 72,
+            "market_bias": "bullish",
+            "sector": "Energy",
+            "reaction_profile": "Energy / Commodity Sensitive",
+            "invalidation_note": "Invalid below VWAP",
+        }
+
+        service._enrich_pretrade_opportunity(setup)
+
+        self.assertEqual(setup["opportunity_phase"], "PRE_TRIGGER_READY")
+        self.assertGreaterEqual(setup["demand_supply_score"], 80)
+        self.assertGreaterEqual(setup["prebreakout_memory_score"], 80)
+        self.assertGreater(setup["target_ahead_probability"], 60)
+        self.assertGreater(setup["relative_opportunity_score"], 60)
+        self.assertEqual(setup["confirmation_quality"], "REAL_ACCUMULATION")
+        self.assertIn("market_intelligence", setup)

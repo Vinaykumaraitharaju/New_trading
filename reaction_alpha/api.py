@@ -236,6 +236,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     }
     function signalWarnings(s) {
       const missing = unique([
+        ...(s.missing_confirmation || []),
         ...(s.missing_factors || []),
         ...(s.prediction_warnings || []),
         ...(s.contradictions || []),
@@ -270,6 +271,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
               <span class="pill">${esc(s.trade_direction || s.direction)}</span>
               <span class="pill">${esc(s.setup_type)}</span>
               <span class="pill">${esc(s.pre_breakout_status)}</span>
+              <span class="pill">${esc(s.opportunity_phase || "WAIT")}</span>
               <span class="pill gold">${esc(s.reaction_profile || "Balanced")}</span>
             </div>
           </div>
@@ -294,6 +296,10 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
               <span class="pill">Volume ${esc(s.volume_state)}</span>
               <span class="pill">VWAP ${esc(s.vwap_state)}</span>
               <span class="pill">Trap ${esc(s.trap_risk)}</span>
+              <span class="pill">Trigger ${Number(s.trigger_distance_pct || 0).toFixed(2)}%</span>
+              <span class="pill">T1 ${Number(s.target1_distance_pct || 0).toFixed(2)}%</span>
+              <span class="pill">Prob ${Math.round(Number(s.target_ahead_probability || 0))}</span>
+              <span class="pill">Pressure ${Math.round(Number(s.demand_supply_score || 0))}</span>
             </div>
             <div class="muted" style="margin-top:10px;">Click to inspect full stock detail.</div>
           </div>
@@ -341,6 +347,10 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
           <div class="muted" style="margin-top:12px;">${esc(s.reaction_profile_note || "Balanced stock profile: signals are judged evenly.")}</div>
           <div class="detail-grid" style="margin-top:14px;">
             ${metric("Selector Score", Math.round(Number(s.final_selector_score || s.confidence || 0)) || "Pending")}
+            ${metric("Relative Opportunity", Math.round(Number(s.relative_opportunity_score || 0)) || "Pending")}
+            ${metric("T1 Probability", `${Math.round(Number(s.target_ahead_probability || 0)) || 0}/100`)}
+            ${metric("Opportunity Phase", s.opportunity_phase || "WAIT")}
+            ${metric("Before Target", s.target_ahead_note || "-")}
             ${metric("Prediction", `${s.prediction_grade || "-"} ${s.pre_breakout_status || ""}`)}
             ${metric("Breakout Probability", s.breakout_probability)}
             ${metric("Market Bias", `${s.market_bias || "-"} ${Math.round(Number(s.market_strength || 0)) || ""}`)}
@@ -363,8 +373,23 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
             ${metric("Target 1", fmt(s.target1))}
             ${metric("Target 2", fmt(s.target2))}
             ${metric("VWAP Distance", `${Number(s.vwap_distance_pct || 0).toFixed(2)}%`)}
+            ${metric("Trigger Distance", `${Number(s.trigger_distance_pct || 0).toFixed(2)}%`)}
+            ${metric("T1 Distance", `${Number(s.target1_distance_pct || 0).toFixed(2)}%`)}
+            ${metric("Risk Distance", `${Number(s.risk_distance_pct || 0).toFixed(2)}%`)}
           </div>
         </div>
+        <section class="detail-section">
+          <div class="k">Market Intelligence</div>
+          <div class="detail-grid" style="margin-top:10px;">
+            ${metric("Demand/Supply", `${Math.round(Number(s.demand_supply_score || 0))}/100`)}
+            ${metric("Pre-Breakout Memory", `${Math.round(Number(s.prebreakout_memory_score || 0))}/100`)}
+            ${metric("Confirmation Quality", s.confirmation_quality || "-")}
+            ${metric("Sector/Market", `${Math.round(Number(s.sector_market_score || 0))}/100`)}
+            ${metric("Catalyst Confidence", `${Math.round(Number(s.catalyst_confidence || 0))}/100`)}
+            ${metric("Expected Time To T1", s.expected_time_to_t1 || "-")}
+          </div>
+          <ul>${list(s.market_intelligence || [])}</ul>
+        </section>
         ${detailList("Why Watching This Stock", keyReasons(s))}
         ${detailList("What Is Missing", signalWarnings(s))}
         ${detailList("When To Act", s.activation_rules || [s.what_must_happen])}
@@ -384,6 +409,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
           </div>
         </section>
         ${detailList("News / Catalyst Context", s.news_context?.length ? s.news_context : [s.reaction_profile_note, "No connected news catalyst was scored as primary in this scan."])}
+        ${detailList("Learning From Results", [s.learning_hint])}
         ${detailList("Trader Logic", s.trader_logic || s.reasons)}
         <section class="detail-section">
           <div class="k">Scorecard Groups</div>
