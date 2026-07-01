@@ -259,8 +259,14 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       return score > 0 ? Math.round(score) : esc(s.trade_status || "WATCH");
     }
     function growwUrl(s) {
-      const query = encodeURIComponent(`${s.symbol || ""} ${s.name || ""}`.trim());
-      return `https://groww.in/search?query=${query}`;
+      const source = String(s.name || s.symbol || "").toLowerCase();
+      const slug = source
+        .replace(/&/g, " and ")
+        .replace(/\blimited\b/g, "ltd")
+        .replace(/\bltd\.?\b/g, "ltd")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+      return `https://groww.in/stocks/${slug}`;
     }
     function renderCard(s) {
       return `
