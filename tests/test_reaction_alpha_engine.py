@@ -250,3 +250,4 @@ class AdaptiveLiveScoringTest(unittest.TestCase):
         self.assertGreater(setup["relative_opportunity_score"], 60)
         self.assertEqual(setup["confirmation_quality"], "REAL_ACCUMULATION")
         self.assertIn("market_intelligence", setup)
+        self.assertEqual(service._pretrade_band(setup), "near-trigger")

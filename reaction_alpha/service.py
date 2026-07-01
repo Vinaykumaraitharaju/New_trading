@@ -846,9 +846,33 @@ class ReactionAlphaService:
         entry_type = str(setup.get("entry_type") or "").upper()
         breakout = str(setup.get("pre_breakout_status") or "").upper()
         score = safe_float(setup.get("final_selector_score") or setup.get("confidence") or 0.0)
+        opportunity = safe_float(setup.get("relative_opportunity_score") or score)
+        probability = safe_float(setup.get("target_ahead_probability"))
+        pressure = safe_float(setup.get("demand_supply_score"))
+        memory = safe_float(setup.get("prebreakout_memory_score"))
+        trigger_distance = safe_float(setup.get("trigger_distance_pct"))
+        phase = str(setup.get("opportunity_phase") or "").upper()
+        confirmation = str(setup.get("confirmation_quality") or "").upper()
 
         if status == "AVOID" or trap == "HIGH" or entry_type == "CHASING":
             return "avoid"
+        if status == "TRADE" and opportunity >= 78 and probability >= 68 and confirmation == "REAL_ACCUMULATION":
+            return "trade-ready"
+        if (
+            phase in {"PRE_TRIGGER_READY", "TRIGGERED"}
+            and opportunity >= 66
+            and probability >= 58
+            and pressure >= 65
+            and trigger_distance <= 0.35
+        ):
+            return "near-trigger"
+        if (
+            phase == "BUILDING_BEFORE_TARGET"
+            and opportunity >= 56
+            and probability >= 48
+            and (pressure >= 58 or memory >= 58)
+        ):
+            return "high-edge watch"
         if bucket == "TRADE_READY" and status == "TRADE" and grade in {"A+", "A"} and score >= 78:
             return "trade-ready"
         if bucket == "NEAR_TRIGGER" or (status == "WAIT" and breakout == "NEAR_BREAKOUT" and score >= 68):
