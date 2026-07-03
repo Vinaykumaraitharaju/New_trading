@@ -208,6 +208,14 @@ class ReactionAlphaService:
         universe = load_universe(max_symbols=max(self.config.pretrade_scan_universe, len(self.config.symbols)))
         symbols = universe["symbol"].astype(str).str.upper().head(self.config.pretrade_scan_universe).tolist()
         quotes = self._router.fetch_quote_snapshot(symbols, batch_size=50)
+        if quotes is None or quotes.empty:
+            fallback = self._pretrade_scan_from_store()
+            fallback["source"] = "runtime store fallback"
+            fallback["status"] = "fallback"
+            fallback["message"] = (
+                "Kotak snapshot is unavailable or needs fresh TOTP; scanner is using latest runtime data instead of forcing login."
+            )
+            return fallback
         quotes = self._enrich_pretrade_quotes(quotes, universe)
         market_frame = self._market_frame_from_router()
         return self._build_pretrade_payload(quotes=quotes, universe=universe, market_frame=market_frame, source="Kotak Neo snapshot")
@@ -801,8 +809,16 @@ class ReactionAlphaService:
                 direction=str(setup.get("trade_direction") or setup.get("direction") or ""),
                 session_date=self.paper_trades.session_date(),
             )
+            analytics = self.paper_trades.analytics(session_date=self.paper_trades.session_date())
         except Exception:
             guard = {}
+            analytics = {}
+        setup_type = str(setup.get("setup_type") or "").upper()
+        direction = str(setup.get("trade_direction") or setup.get("direction") or "").upper()
+        for note in analytics.get("setup_learning_notes", []) if isinstance(analytics, dict) else []:
+            note_setup = str(note.get("setup") or "").upper()
+            if setup_type and setup_type in note_setup and (not direction or direction in note_setup):
+                return "Learning: " + str(note.get("note") or note.get("issue") or "Setup needs review.")
         entries = int(guard.get("entries", 0) or 0)
         if entries <= 0:
             return "Learning: no completed local history for this setup yet."

@@ -251,3 +251,35 @@ class AdaptiveLiveScoringTest(unittest.TestCase):
         self.assertEqual(setup["confirmation_quality"], "REAL_ACCUMULATION")
         self.assertIn("market_intelligence", setup)
         self.assertEqual(service._pretrade_band(setup), "near-trigger")
+
+    def test_paper_analytics_creates_setup_learning_notes(self) -> None:
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as tempdir:
+            config = ReactionAlphaConfig(
+                symbols=["TEST"],
+                simulated=True,
+                paper_trade_db_path=str(Path(tempdir) / "paper_trades.db"),
+            )
+            book = PaperTradeBook(config)
+            now = datetime.now().isoformat(timespec="seconds")
+            with book._connect() as conn:
+                for idx in range(2):
+                    conn.execute(
+                        """
+                        INSERT INTO paper_trades (
+                            symbol, signal, setup_type, regime, direction, state, result, score, confidence,
+                            created_at, updated_at, entry_trigger, stop_loss, target1, target2,
+                            entered_at, exited_at, pnl_points, sl_category, t1_hit, t2_hit
+                        ) VALUES (?, 'STRONG BULLISH', 'BREAKOUT_CONTINUATION', 'CHOPPY', 'BULLISH',
+                            'CLOSED', 'SL_HIT', 16, '70%', ?, ?, 100, 99, 102, 104, ?, ?, -1.2,
+                            'clean_invalidation', 0, 0)
+                        """,
+                        (f"TEST{idx}", now, now, now, now),
+                    )
+
+            notes = book.analytics()["setup_learning_notes"]
+
+            self.assertTrue(notes)
+            self.assertTrue(any("SL hit rate" in note["note"] for note in notes))

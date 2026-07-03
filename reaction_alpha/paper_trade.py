@@ -856,6 +856,35 @@ class PaperTradeBook:
                     "hits": int(row["hits"] or 0),
                 }
             )
+        setup_breakdown = [
+            {
+                "setup_type": str(row["setup_type"]),
+                "regime": str(row["regime"] or ""),
+                "direction": str(row["direction"] or ""),
+                "trigger_side": "BREAKOUT" if str(row["direction"] or "").upper() == "BULLISH" else "BREAKDOWN" if str(row["direction"] or "").upper() == "BEARISH" else "TRIGGER",
+                "trades": int(row["trades"] or 0),
+                "entries": int(row["entries"] or 0),
+                "open_trades": int(row["open_trades"] or 0),
+                "expired": int(row["expired"] or 0),
+                "sl_hits": int(row["sl_hits"] or 0),
+                "time_exits": int(row["time_exits"] or 0),
+                "time_exit_after_t1": int(row["time_exit_after_t1"] or 0),
+                "early_invalidations": int(row["early_invalidations"] or 0),
+                "market_close_exits": int(row["market_close_exits"] or 0),
+                "t1_hits": int(row["t1_hits"] or 0),
+                "t2_hits": int(row["t2_hits"] or 0),
+                "avg_pnl_points": round(float(row["avg_pnl_points"] or 0.0), 2),
+                "avg_mfe_points": round(float(row["avg_mfe_points"] or 0.0), 2),
+                "avg_mae_points": round(float(row["avg_mae_points"] or 0.0), 2),
+                "expectancy_points": round(float(row["avg_pnl_points"] or 0.0), 2),
+                "sl_hit_rate": int(round((int(row["sl_hits"] or 0) / int(row["entries"] or 1)) * 100)) if int(row["entries"] or 0) else 0,
+                "time_exit_rate": int(round((((int(row["time_exits"] or 0)) + int(row["market_close_exits"] or 0) + int(row["early_invalidations"] or 0)) / int(row["entries"] or 1)) * 100)) if int(row["entries"] or 0) else 0,
+                "t1_hit_rate": int(round((int(row["t1_hits"] or 0) / int(row["entries"] or 1)) * 100)) if int(row["entries"] or 0) else 0,
+                "t2_hit_rate": int(round((int(row["t2_hits"] or 0) / int(row["entries"] or 1)) * 100)) if int(row["entries"] or 0) else 0,
+            }
+            for row in setups
+        ]
+        setup_learning_notes = self._setup_learning_notes(setup_breakdown)
         return {
             "session_date": session_date or self.session_date(),
             "total_trades": total,
@@ -907,34 +936,8 @@ class PaperTradeBook:
                 "avg_time_to_trigger_sec": round(float(totals["avg_time_to_trigger_sec"] or 0.0), 1),
                 "avg_hold_sec": round(float(totals["avg_hold_sec"] or 0.0), 1),
             },
-            "setup_breakdown": [
-                {
-                    "setup_type": str(row["setup_type"]),
-                    "regime": str(row["regime"] or ""),
-                    "direction": str(row["direction"] or ""),
-                    "trigger_side": "BREAKOUT" if str(row["direction"] or "").upper() == "BULLISH" else "BREAKDOWN" if str(row["direction"] or "").upper() == "BEARISH" else "TRIGGER",
-                    "trades": int(row["trades"] or 0),
-                    "entries": int(row["entries"] or 0),
-                    "open_trades": int(row["open_trades"] or 0),
-                    "expired": int(row["expired"] or 0),
-                    "sl_hits": int(row["sl_hits"] or 0),
-                    "time_exits": int(row["time_exits"] or 0),
-                    "time_exit_after_t1": int(row["time_exit_after_t1"] or 0),
-                    "early_invalidations": int(row["early_invalidations"] or 0),
-                    "market_close_exits": int(row["market_close_exits"] or 0),
-                    "t1_hits": int(row["t1_hits"] or 0),
-                    "t2_hits": int(row["t2_hits"] or 0),
-                    "avg_pnl_points": round(float(row["avg_pnl_points"] or 0.0), 2),
-                    "avg_mfe_points": round(float(row["avg_mfe_points"] or 0.0), 2),
-                    "avg_mae_points": round(float(row["avg_mae_points"] or 0.0), 2),
-                    "expectancy_points": round(float(row["avg_pnl_points"] or 0.0), 2),
-                    "sl_hit_rate": int(round((int(row["sl_hits"] or 0) / int(row["entries"] or 1)) * 100)) if int(row["entries"] or 0) else 0,
-                    "time_exit_rate": int(round((((int(row["time_exits"] or 0)) + int(row["market_close_exits"] or 0) + int(row["early_invalidations"] or 0)) / int(row["entries"] or 1)) * 100)) if int(row["entries"] or 0) else 0,
-                    "t1_hit_rate": int(round((int(row["t1_hits"] or 0) / int(row["entries"] or 1)) * 100)) if int(row["entries"] or 0) else 0,
-                    "t2_hit_rate": int(round((int(row["t2_hits"] or 0) / int(row["entries"] or 1)) * 100)) if int(row["entries"] or 0) else 0,
-                }
-                for row in setups
-            ],
+            "setup_breakdown": setup_breakdown,
+            "setup_learning_notes": setup_learning_notes,
             "sl_breakdown": [
                 {
                     "bucket": str(row["bucket"]),
@@ -945,6 +948,60 @@ class PaperTradeBook:
                 for row in sl_buckets
             ],
         }
+
+    @staticmethod
+    def _setup_learning_notes(setups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        notes: list[dict[str, Any]] = []
+        for row in setups:
+            entries = int(row.get("entries", 0) or 0)
+            trades = int(row.get("trades", 0) or 0)
+            if entries <= 0 and trades <= 0:
+                continue
+            setup = str(row.get("setup_type") or "UNKNOWN")
+            regime = str(row.get("regime") or "")
+            direction = str(row.get("direction") or "")
+            label = f"{setup}/{regime}/{direction}".strip("/")
+            sl_rate = int(row.get("sl_hit_rate", 0) or 0)
+            t1_rate = int(row.get("t1_hit_rate", 0) or 0)
+            expired = int(row.get("expired", 0) or 0)
+            expectancy = float(row.get("expectancy_points", 0.0) or 0.0)
+            if sl_rate >= 60:
+                notes.append(
+                    {
+                        "setup": label,
+                        "severity": "high",
+                        "issue": "SL rate is high",
+                        "note": f"{label}: SL hit rate {sl_rate}%. Require cleaner confirmation, lower trap risk, and tighter invalidation before promotion.",
+                    }
+                )
+            elif t1_rate <= 25 and entries >= 2:
+                notes.append(
+                    {
+                        "setup": label,
+                        "severity": "medium",
+                        "issue": "Weak T1 follow-through",
+                        "note": f"{label}: T1 hit rate {t1_rate}%. Promote only when demand/supply and volume expansion are above threshold.",
+                    }
+                )
+            if expired >= max(2, trades // 2) and trades >= 2:
+                notes.append(
+                    {
+                        "setup": label,
+                        "severity": "medium",
+                        "issue": "Signals expire before entry",
+                        "note": f"{label}: {expired} expired signals. Bring trigger closer or avoid far-from-trigger watchlist names.",
+                    }
+                )
+            if expectancy < 0 and entries >= 2:
+                notes.append(
+                    {
+                        "setup": label,
+                        "severity": "high",
+                        "issue": "Negative expectancy",
+                        "note": f"{label}: expectancy {expectancy:.2f}. Reduce score until paper results improve.",
+                    }
+                )
+        return notes[:10]
 
     def reset(self, *, session_date: str | None = None) -> dict[str, int | str]:
         with self._lock, self._connect() as conn:

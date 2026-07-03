@@ -840,7 +840,17 @@ class KotakNeoFeed:
             try:
                 if error and self.is_probable_session_error(error):
                     self.logger.info("Re-authenticating Kotak session before reconnect.")
-                    self.reauthenticate()
+                    self.clear_session(purge_saved=False)
+                    try:
+                        self.ensure_authenticated()
+                    except Exception:
+                        if self.totp_secret:
+                            self.reauthenticate()
+                        else:
+                            self.auth_status = "totp_required"
+                            self.auth_error = "Kotak session closed; enter a fresh TOTP to reconnect live feed."
+                            self.logger.error(self.auth_error)
+                            return
                 else:
                     self.ensure_authenticated()
                 self._subscribe_live(wait_timeout=max(self._reconnect_delay * 2, 10.0))
