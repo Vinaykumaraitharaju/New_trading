@@ -336,6 +336,48 @@ class AdaptiveLiveScoringTest(unittest.TestCase):
         self.assertIn("market_intelligence", setup)
         self.assertEqual(service._pretrade_band(setup), "near-trigger")
 
+    def test_triggered_entry_is_promoted_out_of_plain_watchlist(self) -> None:
+        setup = {
+            "trade_status": "WAIT",
+            "selection_bucket": "WATCHLIST",
+            "prediction_grade": "B",
+            "trap_risk": "LOW",
+            "entry_type": "ACCEPTABLE",
+            "pre_breakout_status": "BUILDING",
+            "final_selector_score": 55,
+            "relative_opportunity_score": 50,
+            "target_ahead_probability": 40,
+            "demand_supply_score": 52,
+            "prebreakout_memory_score": 50,
+            "trigger_distance_pct": -0.05,
+            "target1_distance_pct": 0.65,
+            "opportunity_phase": "TRIGGERED",
+            "confirmation_quality": "REAL_ACCUMULATION",
+        }
+
+        self.assertEqual(ReactionAlphaService._pretrade_band(setup), "near-trigger")
+
+    def test_triggered_trade_setup_is_marked_trade_ready(self) -> None:
+        setup = {
+            "trade_status": "TRADE",
+            "selection_bucket": "WATCHLIST",
+            "prediction_grade": "B",
+            "trap_risk": "LOW",
+            "entry_type": "ACCEPTABLE",
+            "pre_breakout_status": "BUILDING",
+            "final_selector_score": 55,
+            "relative_opportunity_score": 50,
+            "target_ahead_probability": 40,
+            "demand_supply_score": 52,
+            "prebreakout_memory_score": 50,
+            "trigger_distance_pct": -0.05,
+            "target1_distance_pct": 0.65,
+            "opportunity_phase": "TRIGGERED",
+            "confirmation_quality": "REAL_ACCUMULATION",
+        }
+
+        self.assertEqual(ReactionAlphaService._pretrade_band(setup), "trade-ready")
+
     def test_paper_analytics_creates_setup_learning_notes(self) -> None:
         import tempfile
         from pathlib import Path

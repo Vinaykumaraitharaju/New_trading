@@ -873,6 +873,10 @@ class ReactionAlphaService:
 
         if status == "AVOID" or trap == "HIGH" or entry_type == "CHASING":
             return "avoid"
+        if phase == "TRIGGERED" and target_distance > 0 and confirmation not in {"TRAP_SETUP", "LATE_CHASING_MOVE"}:
+            if status == "TRADE" or score >= 72:
+                return "trade-ready"
+            return "near-trigger"
         if status == "TRADE" and opportunity >= 78 and probability >= 68 and confirmation == "REAL_ACCUMULATION":
             return "trade-ready"
         if (
