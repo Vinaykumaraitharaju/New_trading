@@ -17,6 +17,7 @@ In the Render service settings, add these environment variables as secrets:
 - `KOTAK_MOBILE_NUMBER`
 - `KOTAK_UCC`
 - `KOTAK_MPIN`
+- `KOTAK_TOTP_SECRET`
 - `KOTAK_ENVIRONMENT`
 - `REACTION_ALPHA_WEBHOOK_SECRET`
 
@@ -25,9 +26,9 @@ Then change:
 - `REACTION_ALPHA_SIMULATED=false`
 - `REACTION_ALPHA_SIM_ALWAYS_OPEN=false`
 
-After Render redeploys, open `/kotak-login` on your Render app URL and enter the current 6-digit authenticator code. If `REACTION_ALPHA_WEBHOOK_SECRET` is set, enter that same value in the admin secret field.
+After Render redeploys, the app can automatically generate fresh TOTP codes if `KOTAK_TOTP_SECRET` contains the permanent authenticator setup key. If you do not set that key, open `/kotak-login` on your Render app URL and enter the current 6-digit authenticator code. If `REACTION_ALPHA_WEBHOOK_SECRET` is set, enter that same value in the admin secret field.
 
-`KOTAK_TOTP_SECRET` is optional. Use it only if you have the permanent authenticator setup key and want fully automatic re-login.
+`KOTAK_TOTP_SECRET` must be the permanent authenticator setup key, not the current 6-digit code shown in the authenticator app. A 6-digit code expires quickly and cannot keep Kotak always available after a redeploy, restart, or screen lock.
 
 Optional Telegram alerts:
 

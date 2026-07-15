@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 import unittest
 
 from reaction_alpha.config import ReactionAlphaConfig
+from data.kotak_neo_feed import KotakNeoFeed
 from reaction_alpha.engines.scoring_engine import UnifiedScoringEngine
 from reaction_alpha.models import ComponentScore, ReactionResult, StructureResult, TickData, TradeSignal
 from reaction_alpha.paper_trade import PaperTradeBook, PendingTrigger
@@ -174,6 +175,36 @@ def test_active_signal_allows_new_trade_levels_for_changed_claim() -> None:
     assert refreshed.sl == 102.0
     assert refreshed.t1 == 99.0
     assert refreshed.t2 == 97.0
+
+
+def test_kotak_permanent_totp_secret_wins_over_stale_manual_code() -> None:
+    feed = KotakNeoFeed(
+        consumer_key="key",
+        mobile_number="9876543210",
+        ucc="ucc",
+        mpin="123456",
+        totp_secret="JBSWY3DPEHPK3PXP",
+        totp_code="123456",
+    )
+
+    assert feed.resolve_totp_value() != "123456"
+
+
+def test_kotak_totp_secret_rejects_current_six_digit_code() -> None:
+    feed = KotakNeoFeed(
+        consumer_key="key",
+        mobile_number="9876543210",
+        ucc="ucc",
+        mpin="123456",
+        totp_secret="123456",
+    )
+
+    try:
+        feed.resolve_totp_value()
+    except RuntimeError as exc:
+        assert "permanent authenticator setup key" in str(exc)
+    else:
+        raise AssertionError("Expected a 6-digit KOTAK_TOTP_SECRET to be rejected")
 
 
 def test_adaptive_setup_guard_blocks_clean_invalidation_row(tmp_path) -> None:

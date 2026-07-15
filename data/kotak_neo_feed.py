@@ -489,12 +489,22 @@ class KotakNeoFeed:
         return any(hint in message for hint in hints)
 
     def resolve_totp_value(self) -> str:
-        candidate = (self.totp_code or self.totp_secret or "").strip()
-        if not candidate:
+        secret = (self.totp_secret or "").strip()
+        code = (self.totp_code or "").strip()
+        if secret:
+            if secret.isdigit() and len(secret) == 6:
+                if code.isdigit() and len(code) == 6:
+                    return code
+                raise RuntimeError(
+                    "KOTAK_TOTP_SECRET must be the permanent authenticator setup key, not a current 6-digit TOTP code. "
+                    "Enter a fresh code in /kotak-login or replace KOTAK_TOTP_SECRET with the setup key for automatic re-login."
+                )
+            return self.generate_totp(secret)
+        if not code:
             raise RuntimeError("TOTP value is missing.")
-        if candidate.isdigit() and len(candidate) == 6:
-            return candidate
-        return self.generate_totp(candidate)
+        if code.isdigit() and len(code) == 6:
+            return code
+        return self.generate_totp(code)
 
     def generate_totp(self, secret: str, digits: int = 6, period: int = 30) -> str:
         normalized = secret.replace(" ", "").upper()
