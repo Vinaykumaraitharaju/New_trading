@@ -867,6 +867,7 @@ class ReactionAlphaService:
         pressure = safe_float(setup.get("demand_supply_score"))
         memory = safe_float(setup.get("prebreakout_memory_score"))
         trigger_distance = safe_float(setup.get("trigger_distance_pct"))
+        target_distance = safe_float(setup.get("target1_distance_pct"))
         phase = str(setup.get("opportunity_phase") or "").upper()
         confirmation = str(setup.get("confirmation_quality") or "").upper()
 
@@ -887,6 +888,16 @@ class ReactionAlphaService:
             and opportunity >= 56
             and probability >= 48
             and (pressure >= 58 or memory >= 58)
+        ):
+            return "high-edge watch"
+        if (
+            phase == "WAIT"
+            and target_distance > 0
+            and trigger_distance <= 1.75
+            and opportunity >= 52
+            and probability >= 42
+            and (pressure >= 56 or memory >= 56)
+            and confirmation not in {"TRAP_SETUP", "LATE_CHASING_MOVE"}
         ):
             return "high-edge watch"
         if bucket == "TRADE_READY" and status == "TRADE" and grade in {"A+", "A"} and score >= 78:
@@ -1385,6 +1396,7 @@ class ReactionAlphaService:
             active_event = state.latest_event()
             signal = self._evaluate_signal(state, active_event.event_type if active_event else "NO EVENT")
             if signal:
+                signal = self._freeze_active_signal_levels(signal, state)
                 self._signals[state.symbol] = signal
                 state.latest_signal = signal
                 trade_direction = self._trade_direction(signal)
@@ -1519,6 +1531,29 @@ class ReactionAlphaService:
                 "regime_confidence": regime.get("confidence"),
                 "setup_profile": setup_profile,
             }
+        return signal
+
+    def _freeze_active_signal_levels(self, signal: TradeSignal, state: SymbolState) -> TradeSignal:
+        existing = self._signals.get(signal.stock)
+        if existing is None:
+            return signal
+        same_claim = existing.setup_type == signal.setup_type and existing.direction == signal.direction
+        if not same_claim:
+            return signal
+        signal.entry = existing.entry
+        signal.sl = existing.sl
+        signal.t1 = existing.t1
+        signal.t2 = existing.t2
+        signal.expected_move = existing.expected_move
+        signal.state = resolve_trade_state(
+            price=state.latest_price(),
+            entry=signal.entry,
+            t1=signal.t1,
+            score=signal.score,
+            strong_threshold=self.config.strong_threshold,
+            direction=signal.direction,
+            setup_profile=str(signal.context.get("setup_profile", "neutral") if isinstance(signal.context, dict) else "neutral"),
+        )
         return signal
 
     def _buildup_score(self, state: SymbolState) -> ComponentScore:

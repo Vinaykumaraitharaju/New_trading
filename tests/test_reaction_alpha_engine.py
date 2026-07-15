@@ -5,7 +5,7 @@ import unittest
 
 from reaction_alpha.config import ReactionAlphaConfig
 from reaction_alpha.engines.scoring_engine import UnifiedScoringEngine
-from reaction_alpha.models import ComponentScore, ReactionResult, StructureResult, TickData
+from reaction_alpha.models import ComponentScore, ReactionResult, StructureResult, TickData, TradeSignal
 from reaction_alpha.paper_trade import PaperTradeBook, PendingTrigger
 from reaction_alpha.service import ReactionAlphaService
 
@@ -18,6 +18,39 @@ def _build_service() -> ReactionAlphaService:
         heartbeat_sec=0.0,
     )
     return ReactionAlphaService(config)
+
+
+def _signal(
+    *,
+    entry: float,
+    sl: float,
+    t1: float,
+    t2: float,
+    setup_type: str = "BREAKOUT_CONTINUATION",
+    direction: str = "BULLISH",
+) -> TradeSignal:
+    return TradeSignal(
+        stock="TEST",
+        event="TEST",
+        reaction="CONTINUATION",
+        signal="STRONG BULLISH",
+        direction=direction,
+        setup_type=setup_type,
+        regime="TRENDING",
+        trend="HH_HL",
+        score=18,
+        entry=entry,
+        sl=sl,
+        t1=t1,
+        t2=t2,
+        expected_move=f"{entry:.2f} -> {t2:.2f}",
+        confidence="75%",
+        reason=[],
+        timestamp=datetime.now().isoformat(timespec="seconds"),
+        context={"setup_profile": "preferred"},
+        raw_confidence=75.0,
+        state="READY",
+    )
 
 
 def test_continuation_signal_reaches_trade_threshold() -> None:
@@ -90,6 +123,57 @@ def test_fake_move_penalty_can_remove_signal() -> None:
     payload = service.get_signal("TEST")
     if payload is not None:
         assert payload["score"] < 18
+
+
+def test_active_signal_keeps_original_trade_levels_for_same_claim() -> None:
+    service = _build_service()
+    state = service.store.get("TEST")
+    state.push_tick(
+        TickData(
+            symbol="TEST",
+            instrument_token="SIM-TEST",
+            exchange_segment="nse_cm",
+            timestamp=datetime.now(),
+            price=100.2,
+            volume=1000,
+            bid=100.15,
+            ask=100.25,
+            bid_size=100,
+            ask_size=100,
+            vwap=100.0,
+            raw={},
+        ),
+        tick_limit=50,
+        candle_limit=50,
+    )
+    service._signals["TEST"] = _signal(entry=100.0, sl=99.0, t1=102.0, t2=104.0)
+
+    refreshed = service._freeze_active_signal_levels(
+        _signal(entry=100.4, sl=99.6, t1=102.8, t2=105.2),
+        state,
+    )
+
+    assert refreshed.entry == 100.0
+    assert refreshed.sl == 99.0
+    assert refreshed.t1 == 102.0
+    assert refreshed.t2 == 104.0
+    assert refreshed.expected_move == "100.00 -> 104.00"
+
+
+def test_active_signal_allows_new_trade_levels_for_changed_claim() -> None:
+    service = _build_service()
+    state = service.store.get("TEST")
+    service._signals["TEST"] = _signal(entry=100.0, sl=99.0, t1=102.0, t2=104.0)
+
+    refreshed = service._freeze_active_signal_levels(
+        _signal(entry=101.0, sl=102.0, t1=99.0, t2=97.0, setup_type="FAILED_BREAKOUT_REVERSAL", direction="BEARISH"),
+        state,
+    )
+
+    assert refreshed.entry == 101.0
+    assert refreshed.sl == 102.0
+    assert refreshed.t1 == 99.0
+    assert refreshed.t2 == 97.0
 
 
 def test_adaptive_setup_guard_blocks_clean_invalidation_row(tmp_path) -> None:
