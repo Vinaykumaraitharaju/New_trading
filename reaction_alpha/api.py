@@ -136,9 +136,17 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     ul { margin:8px 0 0; padding-left:18px; color:#c7d0df; line-height:1.5; }
     .empty { padding:24px; color:var(--muted); border:1px dashed var(--line); border-radius:14px; }
     .live-strip { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--muted); font-size:12px; }
+    .kotak-login { display:grid; grid-template-columns: 132px minmax(160px, 1fr) auto; gap:8px; align-items:center; margin-top:12px; max-width:560px; }
+    .kotak-login input { min-width:0; height:38px; border:1px solid var(--line); border-radius:10px; background:rgba(0,0,0,.22); color:var(--text); padding:0 11px; font:inherit; }
+    .kotak-login input[name="totp"] { font-weight:800; letter-spacing:.12em; }
+    .kotak-login .btn { height:38px; padding:0 13px; }
+    .kotak-login-status { margin-top:7px; min-height:18px; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+    .kotak-login-status.good { color:var(--bull); }
+    .kotak-login-status.bad { color:var(--bear); }
     .pulse { width:10px; height:10px; border-radius:999px; background:var(--bull); box-shadow:0 0 0 0 rgba(0,255,178,.55); animation:pulse 1.4s infinite; }
     @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(0,255,178,.55); } 70% { box-shadow:0 0 0 10px rgba(0,255,178,0); } 100% { box-shadow:0 0 0 0 rgba(0,255,178,0); } }
     @media (max-width: 1000px) { .grid, .card, .detail-body { grid-template-columns:1fr; } .detail-grid, .detail-two { grid-template-columns:1fr; } }
+    @media (max-width: 720px) { .kotak-login { grid-template-columns:1fr; } .kotak-login .btn { width:100%; } }
     @media (max-width: 1100px) { .summary-grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
   </style>
 </head>
@@ -149,6 +157,12 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         <h1>Pre-Trade Setup Scanner</h1>
         <div class="muted">Upcoming trades ranked by market context, sector strength, price structure, candles, volume, VWAP, risk/reward, and fakeout risk.</div>
         <div class="live-strip"><span class="pulse"></span><span id="liveStatus">Live scan ready</span><span id="countdown"></span></div>
+        <form class="kotak-login" id="kotakLoginForm">
+          <input id="kotakTotp" name="totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Kotak TOTP" aria-label="Kotak TOTP" required />
+          <input id="kotakSecret" name="secret" type="password" autocomplete="current-password" placeholder="Admin secret" aria-label="Admin secret" />
+          <button class="btn primary" type="submit">Start Kotak</button>
+        </form>
+        <div class="kotak-login-status" id="kotakLoginStatus"></div>
         <div class="summary-grid" id="summaryGrid"></div>
       </div>
       <div class="nav">
@@ -233,6 +247,45 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         if (setup && setup.symbol) setupMemory.set(String(setup.symbol).toUpperCase(), setup);
       });
       renderObservedList();
+    }
+    async function submitKotakLogin(event) {
+      event.preventDefault();
+      const form = event.currentTarget;
+      const status = document.getElementById("kotakLoginStatus");
+      const button = form.querySelector("button");
+      const formData = new FormData(form);
+      const totp = String(formData.get("totp") || "").trim();
+      const secret = String(formData.get("secret") || "").trim();
+      if (!/^[0-9]{6}$/.test(totp)) {
+        status.className = "kotak-login-status bad";
+        status.textContent = "Enter the current 6-digit Kotak TOTP.";
+        return;
+      }
+      status.className = "kotak-login-status";
+      status.textContent = "Submitting Kotak login...";
+      button.disabled = true;
+      try {
+        const headers = { "Content-Type": "application/json" };
+        if (secret) headers["X-Reaction-Alpha-Secret"] = secret;
+        const response = await fetch("/api/kotak/totp", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ totp_code: totp })
+        });
+        const payload = await response.json();
+        if (!response.ok || payload.ok === false) {
+          throw new Error(payload.detail || payload.message || "Kotak login failed.");
+        }
+        status.className = "kotak-login-status good";
+        status.textContent = payload.message || "Kotak live feed started.";
+        form.reset();
+        load(true);
+      } catch (err) {
+        status.className = "kotak-login-status bad";
+        status.textContent = err.message || "Kotak login failed.";
+      } finally {
+        button.disabled = false;
+      }
     }
     function signalWarnings(s) {
       const missing = unique([
@@ -519,6 +572,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       }
     }
     document.getElementById("refreshBtn").addEventListener("click", () => load(true));
+    document.getElementById("kotakLoginForm").addEventListener("submit", submitKotakLogin);
     document.getElementById("setups").addEventListener("click", (event) => {
       const card = event.target.closest(".card");
       if (card?.dataset?.symbol) openDetail(card.dataset.symbol);
