@@ -344,6 +344,35 @@ def test_pretrade_archive_freezes_active_prediction_levels(tmp_path) -> None:
     assert rows[0]["observation_count"] == 2
 
 
+def test_pretrade_archive_reads_score_aliases(tmp_path) -> None:
+    config = ReactionAlphaConfig(symbols=["TEST"], simulated=True, paper_trade_db_path=str(tmp_path / "paper_trades.db"))
+    book = PaperTradeBook(config)
+    now = datetime.now()
+    setup = {
+        "symbol": "TEST",
+        "side": "LONG",
+        "ltp": 99.5,
+        "entry_high": 100.0,
+        "stop_loss": 98.8,
+        "target1": 101.5,
+        "target2": 103.0,
+        "setup_type": "BREAKOUT_CONTINUATION",
+        "regime": "TRENDING",
+        "scanner_band": "near-trigger",
+        "final_score": 74,
+        "target_probability": 63,
+        "opportunity_score": 68,
+    }
+
+    book.archive_pretrade_setups([setup], generated_at=now, source="test")
+
+    report = book.pretrade_archive_report()
+    row = report["recent"][0]
+    assert row["score"] == 74
+    assert row["target_probability"] == 63
+    assert row["relative_opportunity"] == 68
+
+
 def test_pretrade_archive_scores_t1_and_t2_outcome(tmp_path) -> None:
     config = ReactionAlphaConfig(symbols=["TEST"], simulated=True, paper_trade_db_path=str(tmp_path / "paper_trades.db"))
     book = PaperTradeBook(config)
@@ -531,6 +560,60 @@ class AdaptiveLiveScoringTest(unittest.TestCase):
             "trigger_distance_pct": -0.05,
             "target1_distance_pct": 0.65,
             "opportunity_phase": "TRIGGERED",
+            "confirmation_quality": "REAL_ACCUMULATION",
+        }
+
+        self.assertEqual(ReactionAlphaService._pretrade_band(setup), "trade-ready")
+
+    def test_bullish_price_crossing_entry_high_is_trade_ready(self) -> None:
+        setup = {
+            "side": "BULLISH",
+            "ltp": 101.05,
+            "entry_high": 101.0,
+            "entry_low": 99.8,
+            "target1": 102.0,
+            "stop_loss": 100.2,
+            "trade_status": "WAIT",
+            "selection_bucket": "WATCHLIST",
+            "prediction_grade": "B",
+            "trap_risk": "LOW",
+            "entry_type": "ACCEPTABLE",
+            "pre_breakout_status": "BUILDING",
+            "final_selector_score": 59,
+            "relative_opportunity_score": 54,
+            "target_ahead_probability": 45,
+            "demand_supply_score": 52,
+            "prebreakout_memory_score": 50,
+            "trigger_distance_pct": 0.2,
+            "target1_distance_pct": 0.94,
+            "opportunity_phase": "WAIT",
+            "confirmation_quality": "REAL_ACCUMULATION",
+        }
+
+        self.assertEqual(ReactionAlphaService._pretrade_band(setup), "trade-ready")
+
+    def test_bearish_price_crossing_entry_low_is_trade_ready(self) -> None:
+        setup = {
+            "side": "BEARISH",
+            "ltp": 98.9,
+            "entry_high": 101.0,
+            "entry_low": 99.0,
+            "target1": 97.8,
+            "stop_loss": 100.2,
+            "trade_status": "WAIT",
+            "selection_bucket": "WATCHLIST",
+            "prediction_grade": "B",
+            "trap_risk": "LOW",
+            "entry_type": "ACCEPTABLE",
+            "pre_breakout_status": "BUILDING",
+            "final_selector_score": 59,
+            "relative_opportunity_score": 54,
+            "target_ahead_probability": 45,
+            "demand_supply_score": 52,
+            "prebreakout_memory_score": 50,
+            "trigger_distance_pct": 0.2,
+            "target1_distance_pct": 1.11,
+            "opportunity_phase": "WAIT",
             "confirmation_quality": "REAL_ACCUMULATION",
         }
 

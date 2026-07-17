@@ -571,13 +571,14 @@ class ReactionAlphaService:
     def _enrich_pretrade_opportunity(self, setup: dict[str, Any]) -> None:
         side = str(setup.get("side") or setup.get("direction") or "").upper()
         ltp = safe_float(setup.get("ltp"))
-        entry = safe_float(setup.get("entry_high") if side == "LONG" else setup.get("entry_low"))
+        is_short = side in {"SHORT", "BEARISH", "SELL"}
+        entry = safe_float(setup.get("entry_low") if is_short else setup.get("entry_high"))
         target1 = safe_float(setup.get("target1"))
         stop = safe_float(setup.get("stop_loss"))
         if ltp <= 0:
             return
 
-        direction = 1.0 if side != "SHORT" else -1.0
+        direction = -1.0 if is_short else 1.0
         trigger_gap = direction * (entry - ltp)
         target_gap = direction * (target1 - ltp)
         stop_gap = direction * (ltp - stop)
@@ -750,7 +751,7 @@ class ReactionAlphaService:
         score = (
             demand_supply * 0.30
             + prebreakout_memory * 0.24
-            + safe_float(setup.get("final_selector_score")) * 0.16
+            + ReactionAlphaService._setup_score(setup) * 0.16
             + sector_score * 0.12
             + catalyst_confidence * 0.08
             + max(0.0, min(100.0, 100.0 - max(trigger_pct, 0.0) * 80.0)) * 0.10
@@ -864,7 +865,7 @@ class ReactionAlphaService:
         trap = str(setup.get("trap_risk") or "").upper()
         entry_type = str(setup.get("entry_type") or "").upper()
         breakout = str(setup.get("pre_breakout_status") or "").upper()
-        score = safe_float(setup.get("final_selector_score") or setup.get("confidence") or 0.0)
+        score = ReactionAlphaService._setup_score(setup)
         opportunity = safe_float(setup.get("relative_opportunity_score") or score)
         probability = safe_float(setup.get("target_ahead_probability"))
         pressure = safe_float(setup.get("demand_supply_score"))
@@ -873,11 +874,17 @@ class ReactionAlphaService:
         target_distance = safe_float(setup.get("target1_distance_pct"))
         phase = str(setup.get("opportunity_phase") or "").upper()
         confirmation = str(setup.get("confirmation_quality") or "").upper()
+        side = str(setup.get("side") or setup.get("direction") or setup.get("trade_direction") or "").upper()
+        ltp = safe_float(setup.get("ltp") or setup.get("last_price"))
+        is_short = side in {"SHORT", "BEARISH", "SELL"}
+        entry = safe_float(setup.get("entry_low") if is_short else setup.get("entry_high"))
+        price_triggered = bool(ltp > 0 and entry > 0 and ((ltp <= entry) if is_short else (ltp >= entry)))
+        triggered = phase == "TRIGGERED" or trigger_distance <= 0 or price_triggered
 
         if status == "AVOID" or trap == "HIGH" or entry_type == "CHASING":
             return "avoid"
-        if phase == "TRIGGERED" and target_distance > 0 and confirmation not in {"TRAP_SETUP", "LATE_CHASING_MOVE"}:
-            if status == "TRADE" or score >= 72:
+        if triggered and target_distance > 0 and confirmation not in {"TRAP_SETUP", "LATE_CHASING_MOVE"}:
+            if price_triggered or status == "TRADE" or score >= 58 or opportunity >= 52:
                 return "trade-ready"
             return "near-trigger"
         if status == "TRADE" and opportunity >= 78 and probability >= 68 and confirmation == "REAL_ACCUMULATION":
@@ -918,6 +925,14 @@ class ReactionAlphaService:
         if status == "WAIT":
             return "watchlist"
         return "watchlist"
+
+    @staticmethod
+    def _setup_score(setup: dict[str, Any]) -> float:
+        for key in ("final_selector_score", "selector_score", "final_score", "score", "confidence"):
+            value = safe_float(setup.get(key))
+            if value > 0:
+                return value
+        return 0.0
 
     def submit_kotak_totp(self, totp_code: str) -> dict[str, Any]:
         code = str(totp_code or "").strip()

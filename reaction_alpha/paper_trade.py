@@ -573,9 +573,32 @@ class PaperTradeBook:
             "stop": stop,
             "target1": target1,
             "target2": target2,
-            "score": PaperTradeBook._number(setup.get("final_selector_score") or setup.get("confidence")),
-            "target_probability": PaperTradeBook._number(setup.get("target_ahead_probability")),
-            "relative_opportunity": PaperTradeBook._number(setup.get("relative_opportunity_score")),
+            "score": PaperTradeBook._first_number(
+                setup,
+                "final_selector_score",
+                "selector_score",
+                "final_score",
+                "score",
+                "confidence",
+            ),
+            "target_probability": PaperTradeBook._first_number(
+                setup,
+                "target_ahead_probability",
+                "target_probability",
+                "t1_probability",
+                "probability",
+            ),
+            "relative_opportunity": PaperTradeBook._first_number(
+                setup,
+                "relative_opportunity_score",
+                "opportunity_score",
+                "relative_opportunity",
+                "opportunity",
+                "final_selector_score",
+                "final_score",
+                "score",
+                "confidence",
+            ),
         }
 
     @staticmethod
@@ -588,6 +611,14 @@ class PaperTradeBook:
             return default
 
     @staticmethod
+    def _first_number(setup: dict[str, Any], *keys: str, default: float = 0.0) -> float:
+        for key in keys:
+            value = PaperTradeBook._number(setup.get(key), default=default)
+            if value != default:
+                return value
+        return default
+
+    @staticmethod
     def _pretrade_context_json(setup: dict[str, Any], *, source: str) -> str:
         keys = [
             "symbol",
@@ -595,6 +626,16 @@ class PaperTradeBook:
             "side",
             "setup_type",
             "scanner_band",
+            "scanner_label",
+            "final_selector_score",
+            "selector_score",
+            "final_score",
+            "score",
+            "confidence",
+            "target_ahead_probability",
+            "target_probability",
+            "relative_opportunity_score",
+            "opportunity_score",
             "trade_status",
             "pre_breakout_status",
             "prediction_grade",
