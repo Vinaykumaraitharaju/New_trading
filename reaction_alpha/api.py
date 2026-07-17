@@ -168,6 +168,7 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       <div class="nav">
         <a class="btn" href="/">Dashboard</a>
         <a class="btn" href="/journal">Journal</a>
+        <a class="btn" href="/pretrade/archive">Archive</a>
         <button class="btn primary" id="refreshBtn">Refresh Scan</button>
       </div>
     </div>
@@ -2475,6 +2476,156 @@ def analytics_html(endpoint: str, back_link: str, dashboard_link: str) -> str:
     )
 
 
+def pretrade_archive_html(endpoint: str, scanner_link: str, dashboard_link: str) -> str:
+    return (
+        PRETRADE_ARCHIVE_HTML.replace("window.__ARCHIVE_ENDPOINT__", f"'{endpoint}'")
+        .replace("window.__SCANNER_LINK__", f"'{scanner_link}'")
+        .replace("window.__DASHBOARD_LINK__", f"'{dashboard_link}'")
+    )
+
+
+PRETRADE_ARCHIVE_HTML = """<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Prediction Archive</title>
+  <style>
+    :root { color-scheme:dark; --bg:#070a0f; --panel:#101620; --line:rgba(255,255,255,.10); --text:#f7f8fb; --muted:#9aa7ba; --gold:#d4af37; --bull:#00ffb2; --bear:#ff4d6d; --cyan:#42d8ff; }
+    * { box-sizing:border-box; }
+    body { margin:0; font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; color:var(--text); background:linear-gradient(180deg,#0c1119,#05070b); min-height:100vh; }
+    .wrap { max-width:1480px; margin:0 auto; padding:22px; display:grid; gap:16px; }
+    .top { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; flex-wrap:wrap; }
+    h1 { margin:0; font-size:34px; letter-spacing:-.03em; }
+    .muted { color:var(--muted); line-height:1.55; }
+    .nav { display:flex; gap:10px; flex-wrap:wrap; }
+    .btn { color:inherit; border:1px solid var(--line); background:rgba(255,255,255,.04); border-radius:10px; padding:10px 13px; text-decoration:none; font-weight:700; cursor:pointer; }
+    .panel { background:linear-gradient(180deg,rgba(16,22,32,.94),rgba(8,11,17,.96)); border:1px solid var(--line); border-radius:14px; padding:16px; box-shadow:0 24px 70px rgba(0,0,0,.28); }
+    .stats { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:10px; }
+    .stat { padding:13px; border:1px solid rgba(255,255,255,.07); border-radius:12px; background:rgba(255,255,255,.03); }
+    .k { color:var(--muted); font-size:10px; letter-spacing:.16em; text-transform:uppercase; }
+    .v { margin-top:6px; font-size:24px; font-weight:850; }
+    .green { color:var(--bull); } .red { color:var(--bear); } .gold { color:var(--gold); } .cyan { color:var(--cyan); }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; align-items:start; }
+    .table-wrap { margin-top:12px; overflow:auto; border-radius:12px; border:1px solid rgba(255,255,255,.06); }
+    table { width:100%; border-collapse:collapse; min-width:920px; }
+    th, td { padding:11px 10px; border-bottom:1px solid rgba(255,255,255,.06); text-align:left; font-size:13px; vertical-align:top; }
+    th { color:var(--muted); font-size:10px; letter-spacing:.16em; text-transform:uppercase; background:rgba(255,255,255,.025); }
+    .pill { display:inline-flex; padding:6px 9px; border-radius:999px; border:1px solid rgba(255,255,255,.08); background:rgba(255,255,255,.035); color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.08em; white-space:nowrap; }
+    .pill.good { color:var(--bull); background:rgba(0,255,178,.08); }
+    .pill.bad { color:var(--bear); background:rgba(255,77,109,.08); }
+    .pill.gold { color:var(--gold); background:rgba(212,175,55,.08); }
+    .empty { padding:20px; color:var(--muted); border:1px dashed var(--line); border-radius:12px; }
+    @media (max-width: 980px) { .stats { grid-template-columns:repeat(2,minmax(0,1fr)); } .grid { grid-template-columns:1fr; } }
+    @media (max-width: 680px) { .stats { grid-template-columns:1fr; } h1 { font-size:28px; } }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div>
+        <h1>Prediction Archive</h1>
+        <div class="muted">Every scanner call is archived here, then scored later as entry, T1, T2, SL, missed entry, or time exit.</div>
+      </div>
+      <div class="nav">
+        <a class="btn" id="scannerLink" href="/pre-trade-scanner">Scanner</a>
+        <a class="btn" id="dashboardLink" href="/">Dashboard</a>
+        <button class="btn" id="refreshBtn">Refresh</button>
+      </div>
+    </div>
+    <div id="app"><section class="panel"><div class="empty">Loading archive...</div></section></div>
+  </div>
+  <script>
+    const endpoint = window.__ARCHIVE_ENDPOINT__ || "/api/pretrade/archive";
+    document.getElementById("scannerLink").href = window.__SCANNER_LINK__ || "/pre-trade-scanner";
+    document.getElementById("dashboardLink").href = window.__DASHBOARD_LINK__ || "/";
+    const app = document.getElementById("app");
+    const num = (value) => Number(value || 0);
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (ch) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[ch]));
+    const bandTone = (band) => {
+      const raw = String(band || "").toLowerCase();
+      if (raw === "trade-ready") return "good";
+      if (raw === "near-trigger") return "gold";
+      if (raw === "avoid") return "bad";
+      return "";
+    };
+    const resultTone = (result) => {
+      const raw = String(result || "").toUpperCase();
+      if (raw.includes("T2") || raw.includes("T1")) return "good";
+      if (raw.includes("SL")) return "bad";
+      if (raw.includes("TIME") || raw.includes("MISSED")) return "gold";
+      return "";
+    };
+    const verdict = (row) => {
+      if (!num(row.entered)) return `<span class="pill gold">No entries</span>`;
+      if (num(row.sl_hit_rate) >= 50) return `<span class="pill bad">Weak</span>`;
+      if (num(row.t2_hit_rate) >= 35 && num(row.sl_hit_rate) <= 35) return `<span class="pill good">Working</span>`;
+      if (num(row.t1_hit_rate) >= 50) return `<span class="pill gold">Scalp only</span>`;
+      return `<span class="pill">Watch</span>`;
+    };
+    function render(payload) {
+      const summary = payload.summary || {};
+      const setupRows = (payload.by_setup || []).map((row) => `
+        <tr>
+          <td><strong>${esc(row.setup_type)}</strong><div class="muted">${esc(row.regime)} | ${esc(row.direction)}</div></td>
+          <td><span class="pill ${bandTone(row.scanner_band)}">${esc(row.scanner_band)}</span></td>
+          <td>${row.total}</td><td>${row.entered}</td><td>${row.entry_conversion_pct}%</td>
+          <td class="green">${row.t1_hit_rate}%</td><td class="gold">${row.t2_hit_rate}%</td><td class="red">${row.sl_hit_rate}%</td>
+          <td>${row.avg_mfe}</td><td>${row.avg_mae}</td><td>${verdict(row)}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="11"><div class="empty">No setup archive rows yet.</div></td></tr>`;
+      const symbolRows = (payload.by_symbol || []).map((row) => `
+        <tr>
+          <td><strong>${esc(row.symbol)}</strong></td><td>${row.total}</td><td>${row.active}</td><td>${row.entered}</td><td>${row.entry_conversion_pct}%</td>
+          <td class="green">${row.t1_hit_rate}%</td><td class="gold">${row.t2_hit_rate}%</td><td class="red">${row.sl_hit_rate}%</td><td>${row.avg_score}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="9"><div class="empty">No symbol archive rows yet.</div></td></tr>`;
+      const recentRows = (payload.recent || []).map((row) => `
+        <tr>
+          <td><strong>${esc(row.symbol)}</strong><div class="muted">${esc(row.setup_type)}</div></td>
+          <td><span class="pill ${bandTone(row.scanner_band)}">${esc(row.scanner_band)}</span></td>
+          <td>${esc(row.state)}</td><td><span class="pill ${resultTone(row.result)}">${esc(row.result)}</span></td>
+          <td>${row.latest_price}</td><td>${row.entry_trigger}</td><td>${row.stop_loss}</td><td>${row.target1}</td><td>${row.target2}</td>
+          <td>${row.t1_hit ? "Yes" : "No"}</td><td>${row.t2_hit ? "Yes" : "No"}</td><td>${esc(row.created_at).replace("T", " ")}</td>
+        </tr>
+      `).join("") || `<tr><td colspan="12"><div class="empty">No recent archived predictions yet.</div></td></tr>`;
+      app.innerHTML = `
+        <section class="stats">
+          <div class="stat"><div class="k">Predictions</div><div class="v">${summary.total_predictions || 0}</div></div>
+          <div class="stat"><div class="k">Entered</div><div class="v green">${summary.entered_predictions || 0}</div></div>
+          <div class="stat"><div class="k">Entry Conv</div><div class="v">${summary.entry_conversion_pct || 0}%</div></div>
+          <div class="stat"><div class="k">T2 Hit</div><div class="v gold">${summary.t2_hit_rate || 0}%</div></div>
+          <div class="stat"><div class="k">SL Hit</div><div class="v red">${summary.sl_hit_rate || 0}%</div></div>
+        </section>
+        <section class="grid">
+          <section class="panel">
+            <div class="k">By Setup</div>
+            <div class="table-wrap"><table><thead><tr><th>Setup</th><th>Band</th><th>Total</th><th>Entered</th><th>Conv</th><th>T1</th><th>T2</th><th>SL</th><th>MFE</th><th>MAE</th><th>Verdict</th></tr></thead><tbody>${setupRows}</tbody></table></div>
+          </section>
+          <section class="panel">
+            <div class="k">By Symbol</div>
+            <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Total</th><th>Active</th><th>Entered</th><th>Conv</th><th>T1</th><th>T2</th><th>SL</th><th>Avg Score</th></tr></thead><tbody>${symbolRows}</tbody></table></div>
+          </section>
+        </section>
+        <section class="panel">
+          <div class="k">Recent Predictions</div>
+          <div class="table-wrap"><table><thead><tr><th>Symbol</th><th>Band</th><th>State</th><th>Result</th><th>Live</th><th>Entry</th><th>SL</th><th>T1</th><th>T2</th><th>T1?</th><th>T2?</th><th>Created</th></tr></thead><tbody>${recentRows}</tbody></table></div>
+        </section>
+      `;
+    }
+    async function load() {
+      const res = await fetch(endpoint);
+      const payload = await res.json();
+      render(payload);
+    }
+    document.getElementById("refreshBtn").addEventListener("click", () => load().catch(() => undefined));
+    load().catch(() => { app.innerHTML = '<section class="panel"><div class="empty">Unable to load archive.</div></section>'; });
+    setInterval(() => load().catch(() => undefined), 5000);
+  </script>
+</body>
+</html>"""
+
+
 PAPER_HTML = """<!doctype html>
 <html lang="en">
 <head>
@@ -3776,6 +3927,10 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     async def pretrade_top(force: bool = False) -> dict[str, Any]:
         return service.pretrade_scan(force=force)
 
+    @app.get("/api/pretrade/archive")
+    async def pretrade_archive() -> dict[str, Any]:
+        return service.paper_trades.pretrade_archive_report(session_date=service.paper_trades.session_date())
+
     @app.post("/api/kotak/totp")
     async def submit_kotak_totp(payload: dict[str, Any], x_reaction_alpha_secret: str | None = Header(default=None)) -> dict[str, Any]:
         verify_admin_secret(x_reaction_alpha_secret)
@@ -3792,6 +3947,10 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     @app.get("/api/demo/paper-trades")
     async def demo_paper_trade_journal() -> dict[str, Any]:
         return demo_service.paper_trade_journal(limit=120)
+
+    @app.get("/api/demo/pretrade/archive")
+    async def demo_pretrade_archive() -> dict[str, Any]:
+        return demo_service.paper_trades.pretrade_archive_report(session_date=demo_service.paper_trades.session_date())
 
     @app.post("/api/demo/paper-trades/reset-today")
     async def reset_demo_paper_trades_today() -> dict[str, Any]:
@@ -3829,6 +3988,10 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     async def pretrade_scanner() -> str:
         return PRETRADE_SCANNER_HTML
 
+    @app.get("/pretrade/archive", response_class=HTMLResponse)
+    async def pretrade_archive_page() -> str:
+        return pretrade_archive_html("/api/pretrade/archive", "/pre-trade-scanner", "/")
+
     @app.get("/journal", response_class=HTMLResponse)
     async def journal() -> str:
         return paper_html("/api/paper-trades", "/", "/api/paper-trades/reset-today", "/api/paper-trades/reset-all", "/journal/analytics")
@@ -3840,6 +4003,10 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     @app.get("/demo/journal", response_class=HTMLResponse)
     async def demo_journal() -> str:
         return paper_html("/api/demo/paper-trades", "/demo", "/api/demo/paper-trades/reset-today", "/api/demo/paper-trades/reset-all", "/demo/journal/analytics")
+
+    @app.get("/demo/pretrade/archive", response_class=HTMLResponse)
+    async def demo_pretrade_archive_page() -> str:
+        return pretrade_archive_html("/api/demo/pretrade/archive", "/pre-trade-scanner", "/demo")
 
     @app.get("/journal/analytics", response_class=HTMLResponse)
     async def journal_analytics() -> str:

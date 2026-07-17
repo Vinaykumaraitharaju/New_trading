@@ -495,6 +495,9 @@ class ReactionAlphaService:
                 str(item.get("symbol") or ""),
             )
         )
+        generated_at = datetime.now()
+        self.paper_trades.update_pretrade_prices(quotes.to_dict("records"), timestamp=generated_at)
+        self.paper_trades.archive_pretrade_setups(setups, generated_at=generated_at, source=source)
         band_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for setup in setups:
             band_rows[str(setup.get("scanner_band") or "watchlist").lower()].append(setup)
@@ -524,7 +527,7 @@ class ReactionAlphaService:
             "reasons": (market.reasons if market else synthetic_result.market.reasons)[:6],
         }
         return {
-            "generated_at": datetime.now().isoformat(timespec="seconds"),
+            "generated_at": generated_at.isoformat(timespec="seconds"),
             "source": source,
             "status": "ok",
             "message": (
@@ -1394,6 +1397,7 @@ class ReactionAlphaService:
                 self.paper_trades.force_market_close_if_needed(tick.timestamp)
             self.outcome_tracker.update_from_state(state)
             self.paper_trades.update_symbol(symbol=state.symbol, price=state.latest_price(), timestamp=tick.timestamp)
+            self.paper_trades.update_pretrade_price(symbol=state.symbol, price=state.latest_price(), timestamp=tick.timestamp)
             event = self.event_engine.detect(state)
             if event:
                 state.add_event(event)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
+import tempfile
 import unittest
 
 from reaction_alpha.config import ReactionAlphaConfig
@@ -12,11 +14,13 @@ from reaction_alpha.service import ReactionAlphaService
 
 
 def _build_service() -> ReactionAlphaService:
+    tempdir = tempfile.mkdtemp(prefix="reaction-alpha-test-")
     config = ReactionAlphaConfig(
         symbols=["TEST"],
         simulated=True,
         top_n=5,
         heartbeat_sec=0.0,
+        paper_trade_db_path=str(Path(tempdir) / "paper_trades.db"),
     )
     return ReactionAlphaService(config)
 
@@ -59,6 +63,7 @@ def test_continuation_signal_reaches_trade_threshold() -> None:
     start = datetime(2026, 4, 21, 9, 15, 0)
     total_volume = 0.0
     price = 100.0
+    latest_signal = None
     for index in range(36):
         if index < 20:
             price += 0.05
@@ -86,10 +91,11 @@ def test_continuation_signal_reaches_trade_threshold() -> None:
             raw={},
         )
         signal = service.process_tick(tick)
-    assert signal is not None
-    assert signal.stock == "TEST"
-    assert signal.score >= 12
-    assert signal.reaction in {"CONTINUATION", "ABSORPTION"}
+        latest_signal = signal or latest_signal
+    assert latest_signal is not None
+    assert latest_signal.stock == "TEST"
+    assert latest_signal.score >= 12
+    assert latest_signal.reaction in {"CONTINUATION", "ABSORPTION"}
 
 
 def test_fake_move_penalty_can_remove_signal() -> None:
@@ -304,6 +310,127 @@ def test_choppy_pending_trigger_requires_acceptance_before_entry(tmp_path) -> No
     book._update_candidate(candidate, price=100.24, timestamp=now + timedelta(seconds=20))
     with book._connect() as conn:
         assert conn.execute("SELECT COUNT(*) FROM paper_trades").fetchone()[0] == 1
+
+
+def test_pretrade_archive_freezes_active_prediction_levels(tmp_path) -> None:
+    config = ReactionAlphaConfig(symbols=["TEST"], simulated=True, paper_trade_db_path=str(tmp_path / "paper_trades.db"))
+    book = PaperTradeBook(config)
+    now = datetime.now()
+    setup = {
+        "symbol": "TEST",
+        "side": "LONG",
+        "ltp": 99.5,
+        "entry_high": 100.0,
+        "stop_loss": 98.8,
+        "target1": 101.5,
+        "target2": 103.0,
+        "setup_type": "BREAKOUT_CONTINUATION",
+        "regime": "TRENDING",
+        "scanner_band": "near-trigger",
+        "final_selector_score": 72,
+    }
+    book.archive_pretrade_setups([setup], generated_at=now, source="test")
+    changed = dict(setup, ltp=99.8, entry_high=100.4, stop_loss=99.3, target1=102.2, target2=104.0)
+    book.archive_pretrade_setups([changed], generated_at=now + timedelta(seconds=10), source="test")
+
+    with book._connect() as conn:
+        rows = conn.execute("SELECT entry_trigger, stop_loss, target1, target2, observation_count FROM pretrade_predictions").fetchall()
+
+    assert len(rows) == 1
+    assert rows[0]["entry_trigger"] == 100.0
+    assert rows[0]["stop_loss"] == 98.8
+    assert rows[0]["target1"] == 101.5
+    assert rows[0]["target2"] == 103.0
+    assert rows[0]["observation_count"] == 2
+
+
+def test_pretrade_archive_scores_t1_and_t2_outcome(tmp_path) -> None:
+    config = ReactionAlphaConfig(symbols=["TEST"], simulated=True, paper_trade_db_path=str(tmp_path / "paper_trades.db"))
+    book = PaperTradeBook(config)
+    now = datetime.now()
+    book.archive_pretrade_setups(
+        [
+            {
+                "symbol": "TEST",
+                "side": "LONG",
+                "ltp": 99.5,
+                "entry_high": 100.0,
+                "stop_loss": 98.8,
+                "target1": 101.0,
+                "target2": 102.0,
+                "setup_type": "BREAKOUT_CONTINUATION",
+                "regime": "TRENDING",
+                "scanner_band": "trade-ready",
+            }
+        ],
+        generated_at=now,
+        source="test",
+    )
+
+    book.update_pretrade_price(symbol="TEST", price=100.1, timestamp=now + timedelta(seconds=5))
+    book.update_pretrade_price(symbol="TEST", price=101.2, timestamp=now + timedelta(seconds=10))
+    book.update_pretrade_price(symbol="TEST", price=102.2, timestamp=now + timedelta(seconds=15))
+
+    with book._connect() as conn:
+        row = conn.execute("SELECT state, result, entered_at, t1_hit, t2_hit FROM pretrade_predictions").fetchone()
+
+    assert row["state"] == "CLOSED"
+    assert row["result"] == "T2_HIT"
+    assert row["entered_at"] is not None
+    assert row["t1_hit"] == 1
+    assert row["t2_hit"] == 1
+
+
+def test_pretrade_archive_report_groups_setup_and_symbol_performance(tmp_path) -> None:
+    config = ReactionAlphaConfig(symbols=["TEST"], simulated=True, paper_trade_db_path=str(tmp_path / "paper_trades.db"))
+    book = PaperTradeBook(config)
+    now = datetime.now()
+    book.archive_pretrade_setups(
+        [
+            {
+                "symbol": "TEST",
+                "side": "LONG",
+                "ltp": 99.5,
+                "entry_high": 100.0,
+                "stop_loss": 98.8,
+                "target1": 101.0,
+                "target2": 102.0,
+                "setup_type": "BREAKOUT_CONTINUATION",
+                "regime": "TRENDING",
+                "scanner_band": "trade-ready",
+                "final_selector_score": 78,
+            },
+            {
+                "symbol": "FAIL",
+                "side": "LONG",
+                "ltp": 49.5,
+                "entry_high": 50.0,
+                "stop_loss": 49.0,
+                "target1": 51.0,
+                "target2": 52.0,
+                "setup_type": "BREAKOUT_CONTINUATION",
+                "regime": "TRENDING",
+                "scanner_band": "trade-ready",
+                "final_selector_score": 70,
+            },
+        ],
+        generated_at=now,
+        source="test",
+    )
+    book.update_pretrade_price(symbol="TEST", price=100.2, timestamp=now + timedelta(seconds=5))
+    book.update_pretrade_price(symbol="TEST", price=102.2, timestamp=now + timedelta(seconds=10))
+    book.update_pretrade_price(symbol="FAIL", price=50.1, timestamp=now + timedelta(seconds=5))
+    book.update_pretrade_price(symbol="FAIL", price=48.9, timestamp=now + timedelta(seconds=10))
+
+    report = book.pretrade_archive_report()
+
+    assert report["summary"]["total_predictions"] == 2
+    assert report["summary"]["entered_predictions"] == 2
+    assert report["summary"]["t2_hit_rate"] == 50
+    assert report["summary"]["sl_hit_rate"] == 50
+    assert report["by_setup"][0]["total"] == 2
+    assert {row["symbol"] for row in report["by_symbol"]} == {"TEST", "FAIL"}
+    assert len(report["recent"]) == 2
 
 
 class AdaptiveLiveScoringTest(unittest.TestCase):

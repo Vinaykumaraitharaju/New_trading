@@ -4,6 +4,7 @@ import sqlite3
 import threading
 from dataclasses import dataclass
 from datetime import datetime, time as dt_time, timedelta
+import json
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -129,9 +130,48 @@ class PaperTradeBook:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS pretrade_predictions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol TEXT NOT NULL,
+                    direction TEXT NOT NULL,
+                    setup_type TEXT NOT NULL,
+                    regime TEXT NOT NULL,
+                    scanner_band TEXT NOT NULL DEFAULT '',
+                    scanner_label TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'WATCHING',
+                    result TEXT NOT NULL DEFAULT 'OPEN',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    last_seen_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    entered_at TEXT,
+                    exited_at TEXT,
+                    initial_price REAL NOT NULL,
+                    latest_price REAL NOT NULL,
+                    entry_trigger REAL NOT NULL,
+                    stop_loss REAL NOT NULL,
+                    target1 REAL NOT NULL,
+                    target2 REAL NOT NULL,
+                    exit_price REAL,
+                    score REAL NOT NULL DEFAULT 0,
+                    target_probability REAL NOT NULL DEFAULT 0,
+                    relative_opportunity REAL NOT NULL DEFAULT 0,
+                    observation_count INTEGER NOT NULL DEFAULT 1,
+                    t1_hit INTEGER NOT NULL DEFAULT 0,
+                    t2_hit INTEGER NOT NULL DEFAULT 0,
+                    mfe_points REAL NOT NULL DEFAULT 0,
+                    mae_points REAL NOT NULL DEFAULT 0,
+                    context_json TEXT NOT NULL DEFAULT '{}'
+                )
+                """
+            )
             conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_symbol_state ON paper_trades(symbol, state)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_trades_created_at ON paper_trades(created_at DESC)")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_paper_candidates_updated_at ON paper_candidates(updated_at DESC)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pretrade_predictions_symbol_state ON pretrade_predictions(symbol, state)")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_pretrade_predictions_created_at ON pretrade_predictions(created_at DESC)")
             columns = {row["name"] for row in conn.execute("PRAGMA table_info(paper_trades)").fetchall()}
             if "gross_pnl_points" not in columns:
                 conn.execute("ALTER TABLE paper_trades ADD COLUMN gross_pnl_points REAL NOT NULL DEFAULT 0")
@@ -192,6 +232,496 @@ class PaperTradeBook:
             )
         if rows:
             conn.execute("DELETE FROM paper_trades WHERE state = 'PENDING'")
+
+    def archive_pretrade_setups(self, setups: list[dict[str, Any]], *, generated_at: datetime | None = None, source: str = "") -> None:
+        if not setups:
+            return
+        now_dt = generated_at or datetime.now()
+        now = now_dt.isoformat(timespec="seconds")
+        expires_at = (now_dt + timedelta(minutes=max(self.config.paper_trade_max_hold_min, 1))).isoformat(timespec="seconds")
+        with self._lock, self._connect() as conn:
+            for setup in setups:
+                parsed = self._parse_pretrade_setup(setup)
+                if parsed is None:
+                    continue
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM pretrade_predictions
+                    WHERE symbol = ? AND direction = ? AND setup_type = ? AND state IN ('WATCHING', 'ENTERED')
+                    ORDER BY id DESC LIMIT 1
+                    """,
+                    (parsed["symbol"], parsed["direction"], parsed["setup_type"]),
+                ).fetchone()
+                context = self._pretrade_context_json(setup, source=source)
+                if existing is not None:
+                    conn.execute(
+                        """
+                        UPDATE pretrade_predictions
+                        SET updated_at = ?, last_seen_at = ?, latest_price = ?, scanner_band = ?, scanner_label = ?,
+                            score = MAX(score, ?), target_probability = MAX(target_probability, ?),
+                            relative_opportunity = MAX(relative_opportunity, ?), observation_count = observation_count + 1,
+                            context_json = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            now,
+                            now,
+                            parsed["ltp"],
+                            parsed["scanner_band"],
+                            parsed["scanner_label"],
+                            parsed["score"],
+                            parsed["target_probability"],
+                            parsed["relative_opportunity"],
+                            context,
+                            int(existing["id"]),
+                        ),
+                    )
+                else:
+                    conn.execute(
+                        """
+                        INSERT INTO pretrade_predictions (
+                            symbol, direction, setup_type, regime, scanner_band, scanner_label, state, result,
+                            created_at, updated_at, last_seen_at, expires_at, initial_price, latest_price,
+                            entry_trigger, stop_loss, target1, target2, score, target_probability,
+                            relative_opportunity, context_json
+                        ) VALUES (?, ?, ?, ?, ?, ?, 'WATCHING', 'OPEN', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            parsed["symbol"],
+                            parsed["direction"],
+                            parsed["setup_type"],
+                            parsed["regime"],
+                            parsed["scanner_band"],
+                            parsed["scanner_label"],
+                            now,
+                            now,
+                            now,
+                            expires_at,
+                            parsed["ltp"],
+                            parsed["ltp"],
+                            parsed["entry"],
+                            parsed["stop"],
+                            parsed["target1"],
+                            parsed["target2"],
+                            parsed["score"],
+                            parsed["target_probability"],
+                            parsed["relative_opportunity"],
+                            context,
+                        ),
+                    )
+                self._update_pretrade_predictions_for_symbol(conn, symbol=parsed["symbol"], price=parsed["ltp"], timestamp=now_dt)
+
+    def update_pretrade_prices(self, rows: list[dict[str, Any]], *, timestamp: datetime | None = None) -> None:
+        if not rows:
+            return
+        now_dt = timestamp or datetime.now()
+        with self._lock, self._connect() as conn:
+            for row in rows:
+                symbol = str(row.get("symbol") or "").upper().strip()
+                price = self._number(row.get("ltp") or row.get("price"))
+                if symbol and price > 0:
+                    self._update_pretrade_predictions_for_symbol(conn, symbol=symbol, price=price, timestamp=now_dt)
+
+    def update_pretrade_price(self, *, symbol: str, price: float, timestamp: datetime) -> None:
+        key = str(symbol or "").upper().strip()
+        if not key or price <= 0:
+            return
+        with self._lock, self._connect() as conn:
+            self._update_pretrade_predictions_for_symbol(conn, symbol=key, price=price, timestamp=timestamp)
+
+    def pretrade_archive_summary(self, *, session_date: str | None = None) -> dict[str, Any]:
+        where_clause = "WHERE substr(created_at, 1, 10) = ?" if session_date else ""
+        params: tuple[Any, ...] = (session_date,) if session_date else ()
+        with self._lock, self._connect() as conn:
+            totals = conn.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS total,
+                    SUM(CASE WHEN state IN ('WATCHING', 'ENTERED') THEN 1 ELSE 0 END) AS active,
+                    SUM(CASE WHEN state = 'CLOSED' THEN 1 ELSE 0 END) AS closed,
+                    SUM(CASE WHEN entered_at IS NOT NULL THEN 1 ELSE 0 END) AS entered,
+                    SUM(CASE WHEN result = 'MISSED_ENTRY' THEN 1 ELSE 0 END) AS missed,
+                    SUM(CASE WHEN t1_hit = 1 THEN 1 ELSE 0 END) AS t1_hits,
+                    SUM(CASE WHEN t2_hit = 1 THEN 1 ELSE 0 END) AS t2_hits,
+                    SUM(CASE WHEN result = 'SL_HIT' THEN 1 ELSE 0 END) AS sl_hits,
+                    SUM(CASE WHEN result IN ('TIME_EXIT', 'TIME_EXIT_T1') THEN 1 ELSE 0 END) AS time_exits
+                FROM pretrade_predictions
+                {where_clause}
+                """,
+                params,
+            ).fetchone()
+            by_band = conn.execute(
+                f"""
+                SELECT scanner_band, COUNT(*) AS total,
+                       SUM(CASE WHEN entered_at IS NOT NULL THEN 1 ELSE 0 END) AS entered,
+                       SUM(CASE WHEN t1_hit = 1 THEN 1 ELSE 0 END) AS t1_hits,
+                       SUM(CASE WHEN t2_hit = 1 THEN 1 ELSE 0 END) AS t2_hits,
+                       SUM(CASE WHEN result = 'SL_HIT' THEN 1 ELSE 0 END) AS sl_hits
+                FROM pretrade_predictions
+                {where_clause}
+                GROUP BY scanner_band
+                ORDER BY total DESC
+                LIMIT 8
+                """,
+                params,
+            ).fetchall()
+        total = int(totals["total"] or 0)
+        entered = int(totals["entered"] or 0)
+        closed = int(totals["closed"] or 0)
+        t1_hits = int(totals["t1_hits"] or 0)
+        t2_hits = int(totals["t2_hits"] or 0)
+        sl_hits = int(totals["sl_hits"] or 0)
+        return {
+            "total_predictions": total,
+            "active_predictions": int(totals["active"] or 0),
+            "closed_predictions": closed,
+            "entered_predictions": entered,
+            "missed_entries": int(totals["missed"] or 0),
+            "entry_conversion_pct": int(round((entered / total) * 100)) if total else 0,
+            "t1_hit_rate": int(round((t1_hits / entered) * 100)) if entered else 0,
+            "t2_hit_rate": int(round((t2_hits / entered) * 100)) if entered else 0,
+            "sl_hit_rate": int(round((sl_hits / entered) * 100)) if entered else 0,
+            "time_exit_rate": int(round((int(totals["time_exits"] or 0) / entered) * 100)) if entered else 0,
+            "by_band": [
+                {
+                    "scanner_band": str(row["scanner_band"] or "watchlist"),
+                    "total": int(row["total"] or 0),
+                    "entered": int(row["entered"] or 0),
+                    "t1_hit_rate": int(round((int(row["t1_hits"] or 0) / int(row["entered"] or 1)) * 100)) if int(row["entered"] or 0) else 0,
+                    "t2_hit_rate": int(round((int(row["t2_hits"] or 0) / int(row["entered"] or 1)) * 100)) if int(row["entered"] or 0) else 0,
+                    "sl_hit_rate": int(round((int(row["sl_hits"] or 0) / int(row["entered"] or 1)) * 100)) if int(row["entered"] or 0) else 0,
+                }
+                for row in by_band
+            ],
+        }
+
+    def pretrade_archive_report(self, *, session_date: str | None = None, limit: int = 80) -> dict[str, Any]:
+        where_clause = "WHERE substr(created_at, 1, 10) = ?" if session_date else ""
+        params: tuple[Any, ...] = (session_date,) if session_date else ()
+        with self._lock, self._connect() as conn:
+            by_setup = conn.execute(
+                f"""
+                SELECT setup_type, regime, direction, scanner_band,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN state IN ('WATCHING', 'ENTERED') THEN 1 ELSE 0 END) AS active,
+                       SUM(CASE WHEN entered_at IS NOT NULL THEN 1 ELSE 0 END) AS entered,
+                       SUM(CASE WHEN result = 'MISSED_ENTRY' THEN 1 ELSE 0 END) AS missed,
+                       SUM(CASE WHEN t1_hit = 1 THEN 1 ELSE 0 END) AS t1_hits,
+                       SUM(CASE WHEN t2_hit = 1 THEN 1 ELSE 0 END) AS t2_hits,
+                       SUM(CASE WHEN result = 'SL_HIT' THEN 1 ELSE 0 END) AS sl_hits,
+                       SUM(CASE WHEN result IN ('TIME_EXIT', 'TIME_EXIT_T1') THEN 1 ELSE 0 END) AS time_exits,
+                       AVG(score) AS avg_score,
+                       AVG(target_probability) AS avg_probability,
+                       AVG(relative_opportunity) AS avg_opportunity,
+                       AVG(CASE WHEN state = 'CLOSED' THEN mfe_points END) AS avg_mfe,
+                       AVG(CASE WHEN state = 'CLOSED' THEN mae_points END) AS avg_mae
+                FROM pretrade_predictions
+                {where_clause}
+                GROUP BY setup_type, regime, direction, scanner_band
+                ORDER BY total DESC, entered DESC, t2_hits DESC, sl_hits ASC
+                LIMIT 40
+                """,
+                params,
+            ).fetchall()
+            by_symbol = conn.execute(
+                f"""
+                SELECT symbol,
+                       COUNT(*) AS total,
+                       SUM(CASE WHEN state IN ('WATCHING', 'ENTERED') THEN 1 ELSE 0 END) AS active,
+                       SUM(CASE WHEN entered_at IS NOT NULL THEN 1 ELSE 0 END) AS entered,
+                       SUM(CASE WHEN t1_hit = 1 THEN 1 ELSE 0 END) AS t1_hits,
+                       SUM(CASE WHEN t2_hit = 1 THEN 1 ELSE 0 END) AS t2_hits,
+                       SUM(CASE WHEN result = 'SL_HIT' THEN 1 ELSE 0 END) AS sl_hits,
+                       SUM(CASE WHEN result = 'MISSED_ENTRY' THEN 1 ELSE 0 END) AS missed,
+                       AVG(score) AS avg_score
+                FROM pretrade_predictions
+                {where_clause}
+                GROUP BY symbol
+                ORDER BY total DESC, entered DESC, t2_hits DESC, sl_hits ASC, symbol ASC
+                LIMIT 40
+                """,
+                params,
+            ).fetchall()
+            recent = conn.execute(
+                f"""
+                SELECT id, symbol, direction, setup_type, regime, scanner_band, state, result,
+                       created_at, updated_at, entered_at, exited_at, initial_price, latest_price,
+                       entry_trigger, stop_loss, target1, target2, score, target_probability,
+                       relative_opportunity, observation_count, t1_hit, t2_hit, mfe_points, mae_points
+                FROM pretrade_predictions
+                {where_clause}
+                ORDER BY created_at DESC, id DESC
+                LIMIT ?
+                """,
+                params + (int(limit),),
+            ).fetchall()
+        return {
+            "session_date": session_date or self.session_date(),
+            "summary": self.pretrade_archive_summary(session_date=session_date),
+            "by_setup": [self._archive_group_row(row) for row in by_setup],
+            "by_symbol": [self._archive_symbol_row(row) for row in by_symbol],
+            "recent": [
+                {
+                    "id": int(row["id"]),
+                    "symbol": str(row["symbol"]),
+                    "direction": str(row["direction"]),
+                    "setup_type": str(row["setup_type"]),
+                    "regime": str(row["regime"] or ""),
+                    "scanner_band": str(row["scanner_band"] or "watchlist"),
+                    "state": str(row["state"]),
+                    "result": str(row["result"]),
+                    "created_at": str(row["created_at"]),
+                    "updated_at": str(row["updated_at"]),
+                    "entered_at": row["entered_at"],
+                    "exited_at": row["exited_at"],
+                    "initial_price": round(float(row["initial_price"] or 0.0), 2),
+                    "latest_price": round(float(row["latest_price"] or 0.0), 2),
+                    "entry_trigger": round(float(row["entry_trigger"] or 0.0), 2),
+                    "stop_loss": round(float(row["stop_loss"] or 0.0), 2),
+                    "target1": round(float(row["target1"] or 0.0), 2),
+                    "target2": round(float(row["target2"] or 0.0), 2),
+                    "score": round(float(row["score"] or 0.0), 1),
+                    "target_probability": round(float(row["target_probability"] or 0.0), 1),
+                    "relative_opportunity": round(float(row["relative_opportunity"] or 0.0), 1),
+                    "observation_count": int(row["observation_count"] or 0),
+                    "t1_hit": bool(row["t1_hit"]),
+                    "t2_hit": bool(row["t2_hit"]),
+                    "mfe_points": round(float(row["mfe_points"] or 0.0), 2),
+                    "mae_points": round(float(row["mae_points"] or 0.0), 2),
+                }
+                for row in recent
+            ],
+        }
+
+    @staticmethod
+    def _archive_group_row(row: sqlite3.Row) -> dict[str, Any]:
+        total = int(row["total"] or 0)
+        entered = int(row["entered"] or 0)
+        t1_hits = int(row["t1_hits"] or 0)
+        t2_hits = int(row["t2_hits"] or 0)
+        sl_hits = int(row["sl_hits"] or 0)
+        time_exits = int(row["time_exits"] or 0)
+        return {
+            "setup_type": str(row["setup_type"] or ""),
+            "regime": str(row["regime"] or ""),
+            "direction": str(row["direction"] or ""),
+            "scanner_band": str(row["scanner_band"] or "watchlist"),
+            "total": total,
+            "active": int(row["active"] or 0),
+            "entered": entered,
+            "missed": int(row["missed"] or 0),
+            "entry_conversion_pct": int(round((entered / total) * 100)) if total else 0,
+            "t1_hit_rate": int(round((t1_hits / entered) * 100)) if entered else 0,
+            "t2_hit_rate": int(round((t2_hits / entered) * 100)) if entered else 0,
+            "sl_hit_rate": int(round((sl_hits / entered) * 100)) if entered else 0,
+            "time_exit_rate": int(round((time_exits / entered) * 100)) if entered else 0,
+            "avg_score": round(float(row["avg_score"] or 0.0), 1),
+            "avg_probability": round(float(row["avg_probability"] or 0.0), 1),
+            "avg_opportunity": round(float(row["avg_opportunity"] or 0.0), 1),
+            "avg_mfe": round(float(row["avg_mfe"] or 0.0), 2),
+            "avg_mae": round(float(row["avg_mae"] or 0.0), 2),
+        }
+
+    @staticmethod
+    def _archive_symbol_row(row: sqlite3.Row) -> dict[str, Any]:
+        total = int(row["total"] or 0)
+        entered = int(row["entered"] or 0)
+        t1_hits = int(row["t1_hits"] or 0)
+        t2_hits = int(row["t2_hits"] or 0)
+        sl_hits = int(row["sl_hits"] or 0)
+        return {
+            "symbol": str(row["symbol"] or ""),
+            "total": total,
+            "active": int(row["active"] or 0),
+            "entered": entered,
+            "missed": int(row["missed"] or 0),
+            "entry_conversion_pct": int(round((entered / total) * 100)) if total else 0,
+            "t1_hit_rate": int(round((t1_hits / entered) * 100)) if entered else 0,
+            "t2_hit_rate": int(round((t2_hits / entered) * 100)) if entered else 0,
+            "sl_hit_rate": int(round((sl_hits / entered) * 100)) if entered else 0,
+            "avg_score": round(float(row["avg_score"] or 0.0), 1),
+        }
+
+    @staticmethod
+    def _parse_pretrade_setup(setup: dict[str, Any]) -> dict[str, Any] | None:
+        symbol = str(setup.get("symbol") or "").upper().strip()
+        side = str(setup.get("side") or setup.get("direction") or setup.get("trade_direction") or "").upper()
+        if side in {"LONG", "BULLISH", "BUY"}:
+            direction = "BULLISH"
+            entry = PaperTradeBook._number(setup.get("entry_high") or setup.get("entry_trigger") or setup.get("entry"))
+        elif side in {"SHORT", "BEARISH", "SELL"}:
+            direction = "BEARISH"
+            entry = PaperTradeBook._number(setup.get("entry_low") or setup.get("entry_trigger") or setup.get("entry"))
+        else:
+            return None
+        ltp = PaperTradeBook._number(setup.get("ltp") or setup.get("last_price"))
+        stop = PaperTradeBook._number(setup.get("stop_loss") or setup.get("sl"))
+        target1 = PaperTradeBook._number(setup.get("target1") or setup.get("t1"))
+        target2 = PaperTradeBook._number(setup.get("target2") or setup.get("t2"))
+        if not symbol or min(ltp, entry, stop, target1, target2) <= 0:
+            return None
+        return {
+            "symbol": symbol,
+            "direction": direction,
+            "setup_type": str(setup.get("setup_type") or "UNKNOWN").upper(),
+            "regime": str(setup.get("regime") or setup.get("market_bias") or "").upper(),
+            "scanner_band": str(setup.get("scanner_band") or "watchlist").lower(),
+            "scanner_label": str(setup.get("scanner_label") or ""),
+            "ltp": ltp,
+            "entry": entry,
+            "stop": stop,
+            "target1": target1,
+            "target2": target2,
+            "score": PaperTradeBook._number(setup.get("final_selector_score") or setup.get("confidence")),
+            "target_probability": PaperTradeBook._number(setup.get("target_ahead_probability")),
+            "relative_opportunity": PaperTradeBook._number(setup.get("relative_opportunity_score")),
+        }
+
+    @staticmethod
+    def _number(value: Any, default: float = 0.0) -> float:
+        try:
+            if isinstance(value, str):
+                value = value.replace("%", "").replace(",", "").strip()
+            return float(value)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _pretrade_context_json(setup: dict[str, Any], *, source: str) -> str:
+        keys = [
+            "symbol",
+            "name",
+            "side",
+            "setup_type",
+            "scanner_band",
+            "trade_status",
+            "pre_breakout_status",
+            "prediction_grade",
+            "breakout_probability",
+            "trap_risk",
+            "structure_state",
+            "compression_state",
+            "pressure_state",
+            "vwap_state",
+            "volume_state",
+            "exhaustion_state",
+            "trigger_distance_pct",
+            "target1_distance_pct",
+            "risk_distance_pct",
+            "opportunity_phase",
+            "confirmation_quality",
+            "missing_confirmation",
+            "why_selected",
+            "why_not_higher",
+            "why_ranked_here",
+        ]
+        payload = {key: setup.get(key) for key in keys if key in setup}
+        payload["source"] = source
+        return json.dumps(payload, default=str, separators=(",", ":"))
+
+    def _update_pretrade_predictions_for_symbol(self, conn: sqlite3.Connection, *, symbol: str, price: float, timestamp: datetime) -> None:
+        now = timestamp.isoformat(timespec="seconds")
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM pretrade_predictions
+            WHERE symbol = ? AND state IN ('WATCHING', 'ENTERED')
+            ORDER BY id ASC
+            """,
+            (symbol,),
+        ).fetchall()
+        for row in rows:
+            self._update_pretrade_prediction_row(conn, row=row, price=price, timestamp=timestamp, now=now)
+
+    def _update_pretrade_prediction_row(self, conn: sqlite3.Connection, *, row: sqlite3.Row, price: float, timestamp: datetime, now: str) -> None:
+        direction = str(row["direction"])
+        state = str(row["state"])
+        entry = float(row["entry_trigger"])
+        stop = float(row["stop_loss"])
+        target1 = float(row["target1"])
+        target2 = float(row["target2"])
+        entered_at = row["entered_at"]
+        expires_at = datetime.fromisoformat(str(row["expires_at"]))
+        expired = timestamp >= expires_at
+        entered_now = False
+        if state == "WATCHING":
+            entered_now = (direction == "BULLISH" and price >= entry) or (direction == "BEARISH" and price <= entry)
+            if entered_now:
+                state = "ENTERED"
+                entered_at = now
+            elif expired:
+                conn.execute(
+                    """
+                    UPDATE pretrade_predictions
+                    SET state = 'CLOSED', result = 'MISSED_ENTRY', updated_at = ?, latest_price = ?, exited_at = ?, exit_price = ?
+                    WHERE id = ?
+                    """,
+                    (now, price, now, price, int(row["id"])),
+                )
+                return
+
+        if state != "ENTERED":
+            conn.execute(
+                """
+                UPDATE pretrade_predictions
+                SET updated_at = ?, latest_price = ?
+                WHERE id = ?
+                """,
+                (now, price, int(row["id"])),
+            )
+            return
+
+        favorable = (price - entry) if direction == "BULLISH" else (entry - price)
+        adverse = (entry - price) if direction == "BULLISH" else (price - entry)
+        mfe_points = max(float(row["mfe_points"] or 0.0), favorable)
+        mae_points = max(float(row["mae_points"] or 0.0), adverse)
+        t1_hit = bool(row["t1_hit"]) or ((direction == "BULLISH" and price >= target1) or (direction == "BEARISH" and price <= target1))
+        t2_hit = bool(row["t2_hit"]) or ((direction == "BULLISH" and price >= target2) or (direction == "BEARISH" and price <= target2))
+        sl_hit = (direction == "BULLISH" and price <= stop) or (direction == "BEARISH" and price >= stop)
+        result = "OPEN"
+        closed_state = "ENTERED"
+        exited_at: str | None = None
+        exit_price: float | None = None
+        if t2_hit:
+            result = "T2_HIT"
+            closed_state = "CLOSED"
+            exited_at = now
+            exit_price = price
+        elif sl_hit:
+            result = "SL_HIT"
+            closed_state = "CLOSED"
+            exited_at = now
+            exit_price = price
+        elif expired:
+            result = "TIME_EXIT_T1" if t1_hit else "TIME_EXIT"
+            closed_state = "CLOSED"
+            exited_at = now
+            exit_price = price
+
+        conn.execute(
+            """
+            UPDATE pretrade_predictions
+            SET state = ?, result = ?, updated_at = ?, latest_price = ?, entered_at = COALESCE(entered_at, ?),
+                exited_at = COALESCE(?, exited_at), exit_price = COALESCE(?, exit_price),
+                t1_hit = ?, t2_hit = ?, mfe_points = ?, mae_points = ?
+            WHERE id = ?
+            """,
+            (
+                closed_state,
+                result,
+                now,
+                price,
+                entered_at,
+                exited_at,
+                exit_price,
+                1 if t1_hit else 0,
+                1 if t2_hit else 0,
+                round(max(mfe_points, 0.0), 4),
+                round(max(mae_points, 0.0), 4),
+                int(row["id"]),
+            ),
+        )
 
     def register_signal(self, signal: TradeSignal, *, direction: str) -> None:
         if not self.config.paper_trading_enabled or direction not in {"BULLISH", "BEARISH"}:
@@ -885,6 +1415,7 @@ class PaperTradeBook:
             for row in setups
         ]
         setup_learning_notes = self._setup_learning_notes(setup_breakdown)
+        pretrade_archive = self.pretrade_archive_summary(session_date=session_date)
         return {
             "session_date": session_date or self.session_date(),
             "total_trades": total,
@@ -938,6 +1469,7 @@ class PaperTradeBook:
             },
             "setup_breakdown": setup_breakdown,
             "setup_learning_notes": setup_learning_notes,
+            "pretrade_archive": pretrade_archive,
             "sl_breakdown": [
                 {
                     "bucket": str(row["bucket"]),
@@ -1014,16 +1546,23 @@ class PaperTradeBook:
                     "SELECT COUNT(*) AS total FROM paper_candidates WHERE substr(created_at, 1, 10) = ?",
                     (session_date,),
                 ).fetchone()
+                archive_count = conn.execute(
+                    "SELECT COUNT(*) AS total FROM pretrade_predictions WHERE substr(created_at, 1, 10) = ?",
+                    (session_date,),
+                ).fetchone()
                 conn.execute("DELETE FROM paper_trades WHERE substr(created_at, 1, 10) = ?", (session_date,))
                 conn.execute("DELETE FROM paper_candidates WHERE substr(created_at, 1, 10) = ?", (session_date,))
+                conn.execute("DELETE FROM pretrade_predictions WHERE substr(created_at, 1, 10) = ?", (session_date,))
             else:
                 trade_count = conn.execute("SELECT COUNT(*) AS total FROM paper_trades").fetchone()
                 candidate_count = conn.execute("SELECT COUNT(*) AS total FROM paper_candidates").fetchone()
+                archive_count = conn.execute("SELECT COUNT(*) AS total FROM pretrade_predictions").fetchone()
                 conn.execute("DELETE FROM paper_trades")
                 conn.execute("DELETE FROM paper_candidates")
+                conn.execute("DELETE FROM pretrade_predictions")
         return {
             "status": "ok",
-            "deleted": int(trade_count["total"] or 0) + int(candidate_count["total"] or 0),
+            "deleted": int(trade_count["total"] or 0) + int(candidate_count["total"] or 0) + int(archive_count["total"] or 0),
             "scope": session_date or "all",
         }
 
