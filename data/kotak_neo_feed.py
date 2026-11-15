@@ -20,6 +20,9 @@ from typing import Iterable, Any, Callable
 import pandas as pd
 import requests
 
+INDEX_WIRE_NAMES = {("nse_cm", "NIFTY"): "Nifty 50", ("nse_cm", "BANKNIFTY"): "Nifty Bank",
+                    ("bse_cm", "SENSEX"): "SENSEX"}
+
 
 @dataclass
 class KotakQuote:
@@ -88,7 +91,7 @@ class KotakNeoFeed:
         self._error_callback: Callable[[str], None] | None = None
         self._subscriptions: list[dict[str, str]] = []
         self._subscriptions_are_index = False
-        self._token_to_symbol: dict[str, str] = {}
+        self._token_to_symbol: dict[tuple[str, str], str] = {}
         self._latest_ticks: dict[str, KotakLiveTick] = {}
         self._reconnect_enabled = True
         self._reconnect_delay = 5.0
@@ -113,6 +116,10 @@ class KotakNeoFeed:
     @property
     def configured(self) -> bool:
         return bool(self.consumer_key)
+
+    @property
+    def stream_connected(self) -> bool:
+        return self._ws_ready.is_set() and not self._stop_live.is_set()
 
     def required_login_fields(self) -> dict[str, bool]:
         return {
@@ -413,7 +420,7 @@ class KotakNeoFeed:
             for item in self._subscriptions:
                 item["is_index"] = True
         self._token_to_symbol = {
-            str(item["instrument_token"]): str(item.get("symbol") or item["instrument_token"])
+            (item["exchange_segment"], str(item["instrument_token"])): str(item.get("symbol") or item["instrument_token"])
             for item in normalized
         }
         self._live_callback = on_tick
@@ -722,7 +729,8 @@ class KotakNeoFeed:
         stocks, indices = [], []
         for item in self._subscriptions:
             group = indices if item.get("is_index") else stocks
-            group.append(WsToken(item["exchange_segment"], item["instrument_token"]))
+            token = INDEX_WIRE_NAMES.get((item["exchange_segment"], item["symbol"]), item["instrument_token"]) if item.get("is_index") else item["instrument_token"]
+            group.append(WsToken(item["exchange_segment"], token))
 
         async def consume():
             async with client.create_websocket() as ws:
@@ -812,7 +820,7 @@ class KotakNeoFeed:
             if ltp <= 0:
                 continue
             tick = KotakLiveTick(
-                symbol=self._token_to_symbol.get(token, token),
+                symbol=self._stream_symbol(row, token),
                 instrument_token=token,
                 exchange_segment=str(row.get("e") or row.get("exchange_segment") or row.get("exchangeSegment") or "nse_cm").lower(),
                 ltp=ltp,
@@ -828,6 +836,17 @@ class KotakNeoFeed:
             )
             if self._live_callback:
                 self._live_callback(tick)
+
+    def _stream_symbol(self, row, token):
+        segment = str(row.get("exchange_segment") or row.get("e") or "nse_cm").lower()
+        if row.get("type") == "index":
+            name = str(row.get("name") or row.get("trading_symbol") or "").strip().upper()
+            for (exchange, symbol), wire_name in INDEX_WIRE_NAMES.items():
+                if exchange == segment and name == wire_name.upper():
+                    return symbol
+            if name:
+                return token
+        return self._token_to_symbol.get((segment, token), token)
 
     def _extract_live_rows(self, message: Any) -> list[dict[str, Any]]:
         if isinstance(message, dict):

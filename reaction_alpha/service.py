@@ -41,6 +41,7 @@ from .probability import OutcomeTracker
 from .state import InMemoryMarketStore, SymbolState
 from .trade_levels import build_trade_levels, resolve_trade_state
 from .engines.scoring_engine import UnifiedScore
+from .market_strip import MarketStrip, NAMES
 
 log = logging.getLogger(__name__)
 
@@ -111,6 +112,7 @@ class ReactionAlphaService:
         self._subscriptions: list[dict[str, str]] = []
         self._signals: dict[str, TradeSignal] = {}
         self._indices = [dict(item) for item in INDEX_DEFS]
+        self.market_strip = MarketStrip(self.config.simulated)
         self._equity_symbols: list[str] = list(self.config.symbols)
         try:
             universe = load_universe(max_symbols=max(self.config.dynamic_scan_universe, 240))
@@ -201,6 +203,8 @@ class ReactionAlphaService:
             payload = self._pretrade_scan_from_router()
 
         self._pretrade_cache = payload
+        if payload.get("status") == "ok":
+            self.market_strip.completed(time.time(), payload["stats"]["scanned"])
         self._pretrade_cache_ts = now
         return payload
 
@@ -1435,6 +1439,10 @@ class ReactionAlphaService:
 
     def process_tick(self, tick: TickData) -> TradeSignal | None:
         with self._lock:
+            if tick.symbol in NAMES and (self.config.simulated or tick.raw.get("type") == "index"):
+                receipt = tick.timestamp.timestamp()
+                self.market_strip.observe(tick.symbol, tick.price, receipt if self.config.simulated else tick.raw.get("last_trade_time"),
+                                          self.store.get(tick.symbol).previous_close if self.config.simulated else tick.raw.get("close_price"), receipt)
             state = self.store.update_tick(tick)
             if not self.config.simulated_market_always_open:
                 self.paper_trades.force_market_close_if_needed(tick.timestamp)
@@ -1709,6 +1717,10 @@ class ReactionAlphaService:
                 }
             )
         return cards
+
+    def market_strip_snapshot(self):
+        connected = self._router is not None and self._router.kotak.stream_connected
+        return self.market_strip.snapshot(time.time(), connected)
 
     def snapshot(self) -> dict[str, Any]:
         if not self.config.simulated_market_always_open:

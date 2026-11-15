@@ -10,7 +10,7 @@ let setups=[],selected="",filter=params.get("band")||"all",sort=params.get("sort
 const direction=s=>["BULLISH","LONG","BUY"].includes(String(s.side||s.direction||s.trade_direction).toUpperCase())?"Bullish":["BEARISH","SHORT","SELL"].includes(String(s.side||s.direction||s.trade_direction).toUpperCase())?"Bearish":"Neutral";
 const condition=s=>s.scanner_band==="avoid"?"Avoid: no entry":s.entered_at?"Entry recorded; tracking exits":s.trigger_price==null?"Entry not published":(direction(s)==="Bearish"?"Tick at or below ":"Tick at or above ")+px(s.trigger_price);
 const fmtTime=d=>new Date(d).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata",hour12:false})+" IST";
-async function get(url){const r=await fetch(url,{cache:"no-store"});if(!r.ok)throw Error("Request failed");return r.json()}
+async function get(url,options={}){const r=await fetch(url,{cache:"no-store",...options});if(!r.ok)throw Error("Request failed");return r.json()}
 function table(head,rows,empty){return rows.length?'<table class="grid"><thead><tr>'+head.map(x=>'<th>'+esc(x)+'</th>').join("")+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map((x,i)=>'<td data-label="'+esc(head[i])+'">'+x+'</td>').join("")+'</tr>').join("")+'</tbody></table>':'<p class="empty">'+esc(empty)+'</p>'}
 function note(title,msg){$("notice").innerHTML='<div class="note"><b>'+esc(title)+'</b><small>'+esc(msg)+'</small></div>'}
 function nav(id,url,active){$(id).href=url;if(active)$(id).setAttribute("aria-current","page")}
@@ -56,13 +56,38 @@ function syncDetail(){const sym=location.pathname.match(/\/stock\/([^/]+)/)?.[1]
 $("close").onclick=closeDetail;$("detail").oncancel=e=>{e.preventDefault();closeDetail()};window.onpopstate=syncDetail;
 $("content").onclick=e=>{const a=e.target.closest("a[data-stock]");if(!a||e.ctrlKey||e.metaKey)return;e.preventDefault();history.pushState({drawer:true},"",a.href);syncDetail()};
 async function load(force=false,healthOnly=false){if(loading)return;loading=true;try{
+ try{
  const h=await get(prefix?api+"/snapshot":"/api/health"),f=h.feed_connection||{},sim=prefix||h.mode==="simulated",t=f.last_verified_trade_epoch,age=Date.now()/1000-t;
  const verified=!sim&&f.status==="live"&&t&&age>=0&&age<=15;
  $("connection").textContent=sim?"Demo / simulated prices":verified?"Live / verified trades":f.status==="live"?"Live / stale or unverified":"Live / disconnected";
  $("connection").className=verified?"good":"";$("tradeTime").textContent=t?fmtTime(t*1000):"None verified";
  if(!prefix&&h.mode!=="simulated"&&(await get("/api/kotak/login-state")).state==="totp_required"){location.reload();return}
+ }catch{$("connection").textContent="Feed status unavailable";$("connection").className=""}
  if(healthOnly)return;
  if(isHistory)await historyView();else{const d=await get(api+"/pretrade/top"+(force?"?force=true":""));setups=d.setups||[];scanner();if(d.status==="fallback")$("connection").textContent="Cached snapshot / unverified";const sym=location.pathname.match(/\/stock\/([^/]+)/)?.[1];if(sym)await detail(decodeURIComponent(sym))}
  $("refreshTime").textContent=fmtTime(Date.now())
  }catch{note("Data unavailable","The latest request failed. Previously displayed values are not verified.");$("connection").textContent="Connection unavailable";$("connection").className=""}finally{loading=false}}
 $("refresh").onclick=()=>load(true);load();setInterval(()=>{if(!document.hidden)load(false,$("detail").open||!!document.querySelector("details[open]")||document.activeElement?.matches("select"))},15000);
+
+const levelFmt=new Intl.NumberFormat("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2});
+const signedFmt=new Intl.NumberFormat("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2,signDisplay:"exceptZero"});
+const indexStamp=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Kolkata",day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
+let stripBusy=false,lastQuotes=new Map();
+function paintQuotes(rows){
+ $("indexRows").innerHTML=rows.map(r=>{
+   const prev=lastQuotes.get(r.name),changed=r.status==="live"&&prev&&r.epoch>prev.epoch&&r.level!==prev.level;
+   return '<div class="index-quote"><div class="index-head"><b>'+esc(r.name)+'</b><span class="badge '+(r.status==="live"?"ready":"")+'">'+esc(r.status)+'</span></div><div class="index-values"><b class="'+(changed?"price-update":"")+'">'+(r.level==null?"&mdash;":levelFmt.format(r.level))+'</b><span class="'+(r.change>0?"up":r.change<0?"down":"")+'">'+(r.change==null?"Change unavailable":signedFmt.format(r.change)+" ("+signedFmt.format(r.percent)+"%)")+'</span></div><small>'+(r.epoch?esc(indexStamp.format(r.epoch*1000))+" IST":"No timestamped quote")+'</small></div>';
+ }).join("");lastQuotes=new Map(rows.map(r=>[r.name,r]));
+}
+async function updateStrip(){
+ if(stripBusy||document.hidden)return;stripBusy=true;
+ try{const d=await get(api+"/market-strip",{signal:AbortSignal.timeout(5000)});
+   $("cashSession").textContent="NSE cash session: "+d.session;
+   $("scanActivity").textContent=d.scan?"Last scan: "+indexStamp.format(d.scan.epoch*1000)+" IST | "+d.scan.symbols+" symbols":"No completed scan yet";
+   paintQuotes(d.indices);
+ }catch{
+   $("cashSession").textContent="Session unknown | index feed unavailable";
+   const rows=[...lastQuotes.values()];paintQuotes(rows.map(r=>({...r,status:r.level==null?"unavailable":"last known"})));
+ }finally{stripBusy=false}
+}
+if(!isHistory){$("marketStrip").hidden=false;paintQuotes(["NIFTY 50","SENSEX","BANK NIFTY"].map(name=>({name,status:"unavailable"})));updateStrip();setInterval(updateStrip,4000);document.addEventListener("visibilitychange",updateStrip)}

@@ -536,6 +536,14 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     async def demo_scan(force: bool = False) -> dict[str, Any]:
         return demo_service.pretrade_scan(force=force)
 
+    @app.get("/api/market-strip")
+    async def market_strip() -> dict[str, Any]:
+        return service.market_strip_snapshot()
+
+    @app.get("/api/demo/market-strip")
+    async def demo_market_strip() -> dict[str, Any]:
+        return demo_service.market_strip_snapshot()
+
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
         snapshot = service.snapshot()
