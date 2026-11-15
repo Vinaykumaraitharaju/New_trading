@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 from .config import ReactionAlphaConfig
 from .models import TradeSignal
+from .experience import Experience, init_memory
 
 
 @dataclass(slots=True)
@@ -59,6 +60,7 @@ class PaperTradeBook:
             self.db_path = Path.cwd() / self.db_path
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._init_db()
+        self.experience = Experience(self)
 
     @staticmethod
     def session_date(timestamp: datetime | None = None) -> str:
@@ -189,6 +191,10 @@ class PaperTradeBook:
                 start_price REAL, due_at TEXT, end_by TEXT, ended_at TEXT, end_price REAL, actual TEXT
             )""")
             conn.execute("CREATE INDEX IF NOT EXISTS idx_direction_open ON pretrade_direction_trials(symbol) WHERE actual IS NULL")
+            trial_columns = {r["name"] for r in conn.execute("PRAGMA table_info(pretrade_direction_trials)")}
+            if "shadow_direction" not in trial_columns:
+                conn.execute("ALTER TABLE pretrade_direction_trials ADD COLUMN shadow_direction TEXT")
+            init_memory(conn)
 
     def _migrate_pending_trades_to_candidates(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute(
@@ -263,7 +269,6 @@ class PaperTradeBook:
                     """,
                     (parsed["symbol"], parsed["direction"], parsed["setup_type"]),
                 ).fetchone()
-                context = self._pretrade_context_json(setup, source=source)
                 if existing is not None:
                     conn.execute(
                         """
@@ -277,6 +282,8 @@ class PaperTradeBook:
                         ),
                     )
                 else:
+                    setup["shadow"] = self.experience.predict(source, parsed["setup_type"], parsed["direction"], now_dt)
+                    context = self._pretrade_context_json(setup, source=source)
                     inserted = conn.execute(
                         """
                         INSERT INTO pretrade_predictions (
@@ -311,10 +318,11 @@ class PaperTradeBook:
                     )
                     existing = conn.execute("SELECT * FROM pretrade_predictions WHERE id=?", (inserted.lastrowid,)).fetchone()
                     conn.execute("""INSERT INTO pretrade_direction_trials
-                                 (setup_id,symbol,source,start_by,published_at,baseline) VALUES (?,?,?,?,?,?)""",
+                                 (setup_id,symbol,source,start_by,published_at,baseline,shadow_direction) VALUES (?,?,?,?,?,?,?)""",
                                  (existing["id"], parsed["symbol"], source, (now_dt + timedelta(minutes=1)).isoformat(timespec="microseconds"),
-                                  now, str(setup.get("market_bias") or "UNKNOWN").upper()))
+                                  now, str(setup.get("market_bias") or "UNKNOWN").upper(), setup["shadow"]["direction"]))
                 ctx = json.loads(existing["context_json"])
+                setup["shadow"] = ctx.get("shadow")
                 setup.update(setup_id=existing["id"], setup_state=existing["state"],
                              expires_at=existing["expires_at"], published_at=existing["created_at"],
                              entered_at=existing["entered_at"], price_as_of=existing["updated_at"],
@@ -351,10 +359,12 @@ class PaperTradeBook:
                          WHERE symbol=? AND actual IS NULL AND started_at IS NULL AND published_at<? AND start_by>=?""",
                          (stamp, price, (timestamp + timedelta(minutes=30)).isoformat(timespec="microseconds"),
                           (timestamp + timedelta(minutes=31)).isoformat(timespec="microseconds"), key, stamp, stamp))
-            conn.execute("""UPDATE pretrade_direction_trials SET ended_at=?, end_price=?,
+            completed = conn.execute("""UPDATE pretrade_direction_trials SET ended_at=?, end_price=?,
                          actual=CASE WHEN ?>start_price*1.002 THEN 'BULLISH' WHEN ?<start_price*0.998 THEN 'BEARISH' ELSE 'NEUTRAL' END
                          WHERE symbol=? AND actual IS NULL AND due_at<=? AND end_by>=?""",
                          (stamp, price, price, price, key, stamp, stamp))
+        if completed.rowcount and self.experience.remote:
+            self.experience.wake.set()
 
     def pretrade_archive_summary(self, *, session_date: str | None = None) -> dict[str, Any]:
         where_clause = "WHERE substr(created_at, 1, 10) = ?" if session_date else ""
@@ -498,6 +508,7 @@ class PaperTradeBook:
             "session_date": session_date or self.session_date(),
             "summary": self.pretrade_archive_summary(session_date=session_date),
             "direction_30m_by_source": [dict(row) for row in direction_trials],
+            "experience": self.experience.report(),
             "by_setup": [self._archive_group_row(row) for row in by_setup],
             "by_symbol": [self._archive_symbol_row(row) for row in by_symbol],
             "recent": [
@@ -705,6 +716,7 @@ class PaperTradeBook:
         ]
         payload = {key: setup.get(key) for key in keys if key in setup}
         payload["source"] = source
+        payload["shadow"] = setup.get("shadow")
         payload["strategy_version"] = "tick-touch-v1"
         return json.dumps(payload, default=str, separators=(",", ":"))
 

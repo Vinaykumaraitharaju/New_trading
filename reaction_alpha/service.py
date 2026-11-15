@@ -133,6 +133,7 @@ class ReactionAlphaService:
         self._live_status_detail = "Waiting to initialize live feed"
 
     async def startup(self) -> None:
+        self.paper_trades.experience.start()
         self.hub.bind_loop(asyncio.get_running_loop())
         if self.config.simulated:
             self._live_status = "simulated"
@@ -143,6 +144,7 @@ class ReactionAlphaService:
 
     async def shutdown(self) -> None:
         self._stop_event.set()
+        await asyncio.to_thread(self.paper_trades.experience.shutdown)
         if self._router is not None:
             try:
                 self._router.stop_live_feed()

@@ -488,6 +488,7 @@ def build_demo_snapshot() -> dict[str, Any]:
 
 def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     service = ReactionAlphaService(config=config)
+    service.paper_trades.experience.configure_cloud()
     demo_config = ReactionAlphaConfig(
         symbols=["RELIANCE", "HDFCBANK", "ICICIBANK", "INFY", "TCS"],
         dynamic_universe_enabled=False,
