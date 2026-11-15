@@ -180,6 +180,15 @@ class PaperTradeBook:
             if "sl_category" not in columns:
                 conn.execute("ALTER TABLE paper_trades ADD COLUMN sl_category TEXT")
             self._migrate_pending_trades_to_candidates(conn)
+            archive_columns = {r["name"] for r in conn.execute("PRAGMA table_info(pretrade_predictions)")}
+            if "t1_at" not in archive_columns:
+                conn.execute("ALTER TABLE pretrade_predictions ADD COLUMN t1_at TEXT")
+            conn.execute("""CREATE TABLE IF NOT EXISTS pretrade_direction_trials (
+                setup_id INTEGER PRIMARY KEY, symbol TEXT NOT NULL, source TEXT NOT NULL, start_by TEXT NOT NULL,
+                published_at TEXT NOT NULL, baseline TEXT NOT NULL, started_at TEXT,
+                start_price REAL, due_at TEXT, end_by TEXT, ended_at TEXT, end_price REAL, actual TEXT
+            )""")
+            conn.execute("CREATE INDEX IF NOT EXISTS idx_direction_open ON pretrade_direction_trials(symbol) WHERE actual IS NULL")
 
     def _migrate_pending_trades_to_candidates(self, conn: sqlite3.Connection) -> None:
         rows = conn.execute(
@@ -237,16 +246,17 @@ class PaperTradeBook:
         if not setups:
             return
         now_dt = generated_at or datetime.now()
-        now = now_dt.isoformat(timespec="seconds")
-        expires_at = (now_dt + timedelta(minutes=max(self.config.paper_trade_max_hold_min, 1))).isoformat(timespec="seconds")
+        now = now_dt.isoformat(timespec="microseconds")
+        expires_at = (now_dt + timedelta(minutes=max(self.config.paper_trade_max_hold_min, 1))).isoformat(timespec="microseconds")
         with self._lock, self._connect() as conn:
+            self._expire_pretrade(conn, now)
             for setup in setups:
                 parsed = self._parse_pretrade_setup(setup)
                 if parsed is None:
                     continue
                 existing = conn.execute(
                     """
-                    SELECT id
+                    SELECT *
                     FROM pretrade_predictions
                     WHERE symbol = ? AND direction = ? AND setup_type = ? AND state IN ('WATCHING', 'ENTERED')
                     ORDER BY id DESC LIMIT 1
@@ -258,27 +268,16 @@ class PaperTradeBook:
                     conn.execute(
                         """
                         UPDATE pretrade_predictions
-                        SET updated_at = ?, last_seen_at = ?, latest_price = ?, scanner_band = ?, scanner_label = ?,
-                            score = MAX(score, ?), target_probability = MAX(target_probability, ?),
-                            relative_opportunity = MAX(relative_opportunity, ?), observation_count = observation_count + 1,
-                            context_json = ?
+                        SET last_seen_at = ?, observation_count = observation_count + 1
                         WHERE id = ?
                         """,
                         (
                             now,
-                            now,
-                            parsed["ltp"],
-                            parsed["scanner_band"],
-                            parsed["scanner_label"],
-                            parsed["score"],
-                            parsed["target_probability"],
-                            parsed["relative_opportunity"],
-                            context,
                             int(existing["id"]),
                         ),
                     )
                 else:
-                    conn.execute(
+                    inserted = conn.execute(
                         """
                         INSERT INTO pretrade_predictions (
                             symbol, direction, setup_type, regime, scanner_band, scanner_label, state, result,
@@ -310,18 +309,36 @@ class PaperTradeBook:
                             context,
                         ),
                     )
-                self._update_pretrade_predictions_for_symbol(conn, symbol=parsed["symbol"], price=parsed["ltp"], timestamp=now_dt)
+                    existing = conn.execute("SELECT * FROM pretrade_predictions WHERE id=?", (inserted.lastrowid,)).fetchone()
+                    conn.execute("""INSERT INTO pretrade_direction_trials
+                                 (setup_id,symbol,source,start_by,published_at,baseline) VALUES (?,?,?,?,?,?)""",
+                                 (existing["id"], parsed["symbol"], source, (now_dt + timedelta(minutes=1)).isoformat(timespec="microseconds"),
+                                  now, str(setup.get("market_bias") or "UNKNOWN").upper()))
+                ctx = json.loads(existing["context_json"])
+                setup.update(setup_id=existing["id"], setup_state=existing["state"],
+                             expires_at=existing["expires_at"], published_at=existing["created_at"],
+                             entered_at=existing["entered_at"], price_as_of=existing["updated_at"],
+                             stop_loss=existing["stop_loss"], target1=existing["target1"], target2=existing["target2"])
+                for key in ("entry_low", "entry_high"):
+                    setup[key] = ctx.get(key)
+                setup["entry_low" if parsed["direction"] == "BEARISH" else "entry_high"] = existing["entry_trigger"]
+                setup["trigger_price"] = existing["entry_trigger"]
+                sign = 1 if parsed["direction"] == "BULLISH" else -1
+                risk = abs(existing["entry_trigger"] - existing["stop_loss"])
+                setup["rr"] = abs(existing["target1"] - existing["entry_trigger"]) / risk if risk else 0
+                setup["trigger_distance_pct"] = 100 * sign * (existing["entry_trigger"] - parsed["ltp"]) / parsed["ltp"]
+                setup["target1_distance_pct"] = 100 * sign * (existing["target1"] - parsed["ltp"]) / parsed["ltp"]
+                if existing["scanner_band"] == "avoid":
+                    setup.update(scanner_band="avoid", scanner_label="Avoid at publication")
+                elif existing["state"] == "ENTERED":
+                    setup.update(scanner_band="trade-ready", scanner_label="Paper entry triggered")
+                elif setup.get("scanner_band") == "trade-ready":
+                    setup.update(scanner_band="near-trigger", scanner_label="Awaiting verified tick")
 
-    def update_pretrade_prices(self, rows: list[dict[str, Any]], *, timestamp: datetime | None = None) -> None:
-        if not rows:
-            return
-        now_dt = timestamp or datetime.now()
-        with self._lock, self._connect() as conn:
-            for row in rows:
-                symbol = str(row.get("symbol") or "").upper().strip()
-                price = self._number(row.get("ltp") or row.get("price"))
-                if symbol and price > 0:
-                    self._update_pretrade_predictions_for_symbol(conn, symbol=symbol, price=price, timestamp=now_dt)
+    @staticmethod
+    def _expire_pretrade(conn: sqlite3.Connection, now: str) -> None:
+        conn.execute("""UPDATE pretrade_predictions SET state='CLOSED', result='UNRESOLVED',
+                     exited_at=expires_at WHERE state IN ('WATCHING','ENTERED') AND expires_at <= ?""", (now,))
 
     def update_pretrade_price(self, *, symbol: str, price: float, timestamp: datetime) -> None:
         key = str(symbol or "").upper().strip()
@@ -329,6 +346,15 @@ class PaperTradeBook:
             return
         with self._lock, self._connect() as conn:
             self._update_pretrade_predictions_for_symbol(conn, symbol=key, price=price, timestamp=timestamp)
+            stamp = timestamp.isoformat(timespec="microseconds")
+            conn.execute("""UPDATE pretrade_direction_trials SET started_at=?, start_price=?, due_at=?, end_by=?
+                         WHERE symbol=? AND actual IS NULL AND started_at IS NULL AND published_at<? AND start_by>=?""",
+                         (stamp, price, (timestamp + timedelta(minutes=30)).isoformat(timespec="microseconds"),
+                          (timestamp + timedelta(minutes=31)).isoformat(timespec="microseconds"), key, stamp, stamp))
+            conn.execute("""UPDATE pretrade_direction_trials SET ended_at=?, end_price=?,
+                         actual=CASE WHEN ?>start_price*1.002 THEN 'BULLISH' WHEN ?<start_price*0.998 THEN 'BEARISH' ELSE 'NEUTRAL' END
+                         WHERE symbol=? AND actual IS NULL AND due_at<=? AND end_by>=?""",
+                         (stamp, price, price, price, key, stamp, stamp))
 
     def pretrade_archive_summary(self, *, session_date: str | None = None) -> dict[str, Any]:
         where_clause = "WHERE substr(created_at, 1, 10) = ?" if session_date else ""
@@ -396,10 +422,11 @@ class PaperTradeBook:
             ],
         }
 
-    def pretrade_archive_report(self, *, session_date: str | None = None, limit: int = 80) -> dict[str, Any]:
+    def pretrade_archive_report(self, *, session_date: str | None = None, limit: int = 80, setup_id: int | None = None) -> dict[str, Any]:
         where_clause = "WHERE substr(created_at, 1, 10) = ?" if session_date else ""
         params: tuple[Any, ...] = (session_date,) if session_date else ()
         with self._lock, self._connect() as conn:
+            self._expire_pretrade(conn, datetime.now().isoformat(timespec="microseconds"))
             by_setup = conn.execute(
                 f"""
                 SELECT setup_type, regime, direction, scanner_band,
@@ -443,27 +470,46 @@ class PaperTradeBook:
                 """,
                 params,
             ).fetchall()
+            direction_trials = conn.execute(f"""
+                SELECT source, COUNT(*) AS published,
+                    COUNT(actual) AS measured,
+                    SUM(CASE WHEN actual IS NOT NULL AND baseline IN ('BULLISH','BEARISH','NEUTRAL') THEN 1 ELSE 0 END) AS paired,
+                    SUM(CASE WHEN direction=actual AND baseline IN ('BULLISH','BEARISH','NEUTRAL') THEN 1 ELSE 0 END) AS scanner_correct,
+                    SUM(CASE WHEN baseline=actual THEN 1 ELSE 0 END) AS market_correct
+                FROM pretrade_direction_trials JOIN pretrade_predictions ON setup_id=id
+                {where_clause} GROUP BY source""", params).fetchall()
             recent = conn.execute(
                 f"""
                 SELECT id, symbol, direction, setup_type, regime, scanner_band, state, result,
                        created_at, updated_at, entered_at, exited_at, initial_price, latest_price,
                        entry_trigger, stop_loss, target1, target2, score, target_probability,
-                       relative_opportunity, observation_count, t1_hit, t2_hit, mfe_points, mae_points
+                       relative_opportunity, observation_count, t1_hit, t2_hit, mfe_points, mae_points,
+                       context_json, expires_at, t1_at,
+                       (SELECT actual FROM pretrade_direction_trials WHERE setup_id=id) AS direction_30m,
+                       (SELECT baseline FROM pretrade_direction_trials WHERE setup_id=id) AS market_baseline
                 FROM pretrade_predictions
-                {where_clause}
+                {"WHERE id = ?" if setup_id is not None else where_clause}
                 ORDER BY created_at DESC, id DESC
                 LIMIT ?
                 """,
-                params + (int(limit),),
+                ((setup_id,) if setup_id is not None else params) + (int(limit),),
             ).fetchall()
         return {
             "session_date": session_date or self.session_date(),
             "summary": self.pretrade_archive_summary(session_date=session_date),
+            "direction_30m_by_source": [dict(row) for row in direction_trials],
             "by_setup": [self._archive_group_row(row) for row in by_setup],
             "by_symbol": [self._archive_symbol_row(row) for row in by_symbol],
             "recent": [
                 {
                     "id": int(row["id"]),
+                    "strategy_version": json.loads(row["context_json"]).get("strategy_version", "legacy"),
+                    "source": json.loads(row["context_json"]).get("source", "unknown"),
+                    "expires_at": row["expires_at"],
+                    "t1_at": row["t1_at"],
+                    "first_barrier": ("T1" if row["t1_hit"] else "STOP" if row["result"] == "SL_HIT" else None),
+                    "direction_30m": row["direction_30m"],
+                    "market_baseline": row["market_baseline"],
                     "symbol": str(row["symbol"]),
                     "direction": str(row["direction"]),
                     "setup_type": str(row["setup_type"]),
@@ -623,7 +669,7 @@ class PaperTradeBook:
         keys = [
             "symbol",
             "name",
-            "side",
+            "side", "entry_low", "entry_high",
             "setup_type",
             "scanner_band",
             "scanner_label",
@@ -659,10 +705,11 @@ class PaperTradeBook:
         ]
         payload = {key: setup.get(key) for key in keys if key in setup}
         payload["source"] = source
+        payload["strategy_version"] = "tick-touch-v1"
         return json.dumps(payload, default=str, separators=(",", ":"))
 
     def _update_pretrade_predictions_for_symbol(self, conn: sqlite3.Connection, *, symbol: str, price: float, timestamp: datetime) -> None:
-        now = timestamp.isoformat(timespec="seconds")
+        now = timestamp.isoformat(timespec="microseconds")
         rows = conn.execute(
             """
             SELECT *
@@ -685,21 +732,26 @@ class PaperTradeBook:
         entered_at = row["entered_at"]
         expires_at = datetime.fromisoformat(str(row["expires_at"]))
         expired = timestamp >= expires_at
+        if timestamp <= datetime.fromisoformat(row["updated_at"]):
+            return
+        if expired:
+            conn.execute("UPDATE pretrade_predictions SET state='CLOSED', result='UNRESOLVED', exited_at=expires_at WHERE id=?", (row["id"],))
+            return
+        if state == "WATCHING" and row["scanner_band"] == "avoid":
+            return
         entered_now = False
         if state == "WATCHING":
             entered_now = (direction == "BULLISH" and price >= entry) or (direction == "BEARISH" and price <= entry)
             if entered_now:
+                if (price >= target1 if direction == "BULLISH" else price <= target1):
+                    conn.execute("""UPDATE pretrade_predictions SET state='CLOSED', result='MISSED_ENTRY',
+                                 updated_at=?, exited_at=?, latest_price=? WHERE id=?""", (now, now, price, row["id"]))
+                    return
                 state = "ENTERED"
                 entered_at = now
-            elif expired:
-                conn.execute(
-                    """
-                    UPDATE pretrade_predictions
-                    SET state = 'CLOSED', result = 'MISSED_ENTRY', updated_at = ?, latest_price = ?, exited_at = ?, exit_price = ?
-                    WHERE id = ?
-                    """,
-                    (now, price, now, price, int(row["id"])),
-                )
+            elif (price <= stop if direction == "BULLISH" else price >= stop):
+                conn.execute("""UPDATE pretrade_predictions SET state='CLOSED', result='INVALIDATED',
+                             updated_at=?, exited_at=?, latest_price=? WHERE id=?""", (now, now, price, row["id"]))
                 return
 
         if state != "ENTERED":
@@ -734,18 +786,14 @@ class PaperTradeBook:
             closed_state = "CLOSED"
             exited_at = now
             exit_price = price
-        elif expired:
-            result = "TIME_EXIT_T1" if t1_hit else "TIME_EXIT"
-            closed_state = "CLOSED"
-            exited_at = now
-            exit_price = price
 
         conn.execute(
             """
             UPDATE pretrade_predictions
             SET state = ?, result = ?, updated_at = ?, latest_price = ?, entered_at = COALESCE(entered_at, ?),
                 exited_at = COALESCE(?, exited_at), exit_price = COALESCE(?, exit_price),
-                t1_hit = ?, t2_hit = ?, mfe_points = ?, mae_points = ?
+                t1_hit = ?, t2_hit = ?, mfe_points = ?, mae_points = ?,
+                t1_at = COALESCE(t1_at, ?)
             WHERE id = ?
             """,
             (
@@ -760,6 +808,7 @@ class PaperTradeBook:
                 1 if t2_hit else 0,
                 round(max(mfe_points, 0.0), 4),
                 round(max(mae_points, 0.0), 4),
+                now if t1_hit and not row["t1_hit"] else None,
                 int(row["id"]),
             ),
         )
@@ -1594,6 +1643,7 @@ class PaperTradeBook:
                 conn.execute("DELETE FROM paper_trades WHERE substr(created_at, 1, 10) = ?", (session_date,))
                 conn.execute("DELETE FROM paper_candidates WHERE substr(created_at, 1, 10) = ?", (session_date,))
                 conn.execute("DELETE FROM pretrade_predictions WHERE substr(created_at, 1, 10) = ?", (session_date,))
+                conn.execute("DELETE FROM pretrade_direction_trials WHERE substr(published_at,1,10)=?", (session_date,))
             else:
                 trade_count = conn.execute("SELECT COUNT(*) AS total FROM paper_trades").fetchone()
                 candidate_count = conn.execute("SELECT COUNT(*) AS total FROM paper_candidates").fetchone()
@@ -1601,6 +1651,7 @@ class PaperTradeBook:
                 conn.execute("DELETE FROM paper_trades")
                 conn.execute("DELETE FROM paper_candidates")
                 conn.execute("DELETE FROM pretrade_predictions")
+                conn.execute("DELETE FROM pretrade_direction_trials")
         return {
             "status": "ok",
             "deleted": int(trade_count["total"] or 0) + int(candidate_count["total"] or 0) + int(archive_count["total"] or 0),

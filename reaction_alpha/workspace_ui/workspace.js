@@ -1,0 +1,68 @@
+"use strict";
+const $=id=>document.getElementById(id), esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const money=new Intl.NumberFormat("en-IN",{style:"currency",currency:"INR",maximumFractionDigits:2}), px=x=>x!=null&&Number.isFinite(+x)?money.format(+x):"Not available";
+const prefix=/^\/demo(?:\/|$)/.test(location.pathname)?"/demo":"", home=prefix||"/", api="/api"+prefix, hist=prefix+"/history";
+const path=location.pathname.slice(prefix.length), isHistory=/history|journal|archive/.test(path);
+const params=new URLSearchParams(location.search), tab=path.includes("analytics")?"performance":path.includes("journal")?"trades":params.get("tab")||"forecasts";
+const target=params.get("setup")||location.hash.match(/^#setup-(\d+)$/)?.[1];
+const bands={"trade-ready":"Trade ready","near-trigger":"Near trigger","high-edge watch":"High-edge watch",watchlist:"Watchlist",avoid:"Avoid"};
+let setups=[],selected="",filter=params.get("band")||"all",sort=params.get("sort")||"rank",loading=false;
+const direction=s=>["BULLISH","LONG","BUY"].includes(String(s.side||s.direction||s.trade_direction).toUpperCase())?"Bullish":["BEARISH","SHORT","SELL"].includes(String(s.side||s.direction||s.trade_direction).toUpperCase())?"Bearish":"Neutral";
+const condition=s=>s.scanner_band==="avoid"?"Avoid: no entry":s.entered_at?"Entry recorded; tracking exits":s.trigger_price==null?"Entry not published":(direction(s)==="Bearish"?"Tick at or below ":"Tick at or above ")+px(s.trigger_price);
+const fmtTime=d=>new Date(d).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata",hour12:false})+" IST";
+async function get(url){const r=await fetch(url,{cache:"no-store"});if(!r.ok)throw Error("Request failed");return r.json()}
+function table(head,rows,empty){return rows.length?'<table class="grid"><thead><tr>'+head.map(x=>'<th>'+esc(x)+'</th>').join("")+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map((x,i)=>'<td data-label="'+esc(head[i])+'">'+x+'</td>').join("")+'</tr>').join("")+'</tbody></table>':'<p class="empty">'+esc(empty)+'</p>'}
+function note(title,msg){$("notice").innerHTML='<div class="note"><b>'+esc(title)+'</b><small>'+esc(msg)+'</small></div>'}
+function nav(id,url,active){$(id).href=url;if(active)$(id).setAttribute("aria-current","page")}
+nav("brand",home,false);nav("scannerNav",home,!isHistory);nav("historyNav",hist,isHistory);$("mode").value=prefix;
+$("mode").onchange=()=>{location.href=($("mode").value||"")+(location.pathname.slice(prefix.length)||"/")+location.search+location.hash};
+function scanUrl(symbol){const u=new URL(symbol?prefix+"/stock/"+encodeURIComponent(symbol):home,location.origin);if(filter!=="all")u.searchParams.set("band",filter);if(sort!=="rank")u.searchParams.set("sort",sort);return u.pathname+u.search}
+function scanner(){
+ const actionable=setups.filter(s=>s.scanner_band==="trade-ready");
+ if(!actionable.length){const candidates=setups.filter(s=>s.scanner_band!=="avoid"&&s.trigger_price>0&&s.ltp>0);
+ const distance=s=>Math.abs(s.trigger_price/s.ltp-1);candidates.sort((a,b)=>distance(a)-distance(b));
+ note("No actionable setups",candidates.length?"Nearest candidate: "+candidates[0].symbol+" | "+condition(candidates[0]):"No eligible candidate with a published trigger.");}else $("notice").replaceChildren();
+ const rows=setups.filter(s=>filter==="all"?s.scanner_band!=="avoid":s.scanner_band===filter);
+ if(sort==="symbol")rows.sort((a,b)=>a.symbol.localeCompare(b.symbol));
+ $("tools").innerHTML='<div class="toolbar"><b>Ranked setups <small> / '+rows.length+'</small></b><div class="controls"><select aria-label="Readiness filter" id="band"><option value="all">All except Avoid</option>'+Object.entries(bands).map(([k,v])=>'<option value="'+k+'">'+v+'</option>').join("")+'</select><select id="sort" aria-label="Sort setups"><option value="rank">Rank order</option><option value="symbol">Symbol A-Z</option></select></div></div>';
+ $("band").value=filter;$("sort").value=sort;
+ $("band").onchange=$("sort").onchange=()=>{filter=$("band").value;sort=$("sort").value;history.replaceState(null,"",scanUrl());scanner()};
+ $("content").innerHTML=table(["Stock","Outlook","Readiness","Last price","Entry condition","Invalidation"],rows.map(s=>[
+ '<a data-stock="'+esc(s.symbol)+'" href="'+esc(scanUrl(s.symbol))+'">'+esc(s.symbol)+'</a><small>'+esc(s.sector)+'</small>',
+ '<b class="'+(direction(s)==="Bearish"?"down":"up")+'">'+direction(s)+'</b><small>30 min</small>',
+ '<span class="badge '+(s.scanner_band==="trade-ready"?"ready":s.scanner_band==="near-trigger"?"warn":"")+'">'+esc(bands[s.scanner_band]||"Watching")+'</span>',px(s.ltp),esc(condition(s)),px(s.stop_loss)]),"No setups match this filter.");
+ if(selected)document.querySelector('a[data-stock="'+CSS.escape(selected)+'"]')?.closest("tr").classList.add("selected");
+}
+function outcome(r){if(r.first_barrier==="T1"&&r.result==="SL_HIT")return "T1 before stop";return ({INVALIDATED:"Invalidated",UNRESOLVED:"Insufficient data",MISSED_ENTRY:"Never entered",OPEN:r.entered_at?"Entry recorded":"Waiting for entry",T2_HIT:"T2 reached",SL_HIT:"Stop reached"})[r.result]||r.result}
+async function historyView(){
+ $("title").textContent="Research history";
+ $("tools").innerHTML='<div class="tabs">'+[["forecasts","Forecasts"],["trades","Paper trades"],["performance","Performance"]].map(([k,v])=>'<a '+(k===tab?'aria-current="page"':'')+' href="'+hist+'?tab='+k+'">'+v+'</a>').join("")+'</div>';
+ if(tab==="forecasts"){
+ const data=await get(api+"/pretrade/archive"+(target?"?setup_id="+encodeURIComponent(target):""));
+ $("content").innerHTML=table(["Forecast","Direction","Lifecycle","Entry","Stop","Targets"],data.recent.map(r=>[
+ '<b>'+esc(r.symbol)+'</b><small>#'+esc(r.id)+' | '+esc(r.setup_type)+'</small>',esc(r.direction)+'<small>30 min: '+esc(r.direction_30m||"Not measured")+'</small>',
+ '<b>'+esc(outcome(r))+'</b><details '+(String(r.id)===target?"open":"")+'><summary>Timeline</summary>'+[["Published",r.created_at],["Entry",r.entered_at],["T1",r.t1_at],["Exit",r.exited_at],["Deadline",r.expires_at]].map(([k,v])=>'<small>'+k+': '+esc(v||"Not observed")+'</small>').join("")+'</details>',px(r.entry_trigger),px(r.stop_loss),px(r.target1)+' / '+px(r.target2)]),target?"Forecast not found in this workspace.":"No forecasts published this session.");
+ }else{const d=await get(api+"/paper-trades"),a=d.analytics||{};
+ if(tab==="trades")$("content").innerHTML=table(["Paper trade","Direction","State","Entry fill","Stop","Result"],d.trades.map(t=>[esc(t.symbol),esc(t.direction),esc(t.state),px(t.trigger_price),px(t.stop_loss),esc(t.result||"Open")]),"No paper entries this session.")+'<h2>Pending triggers</h2>'+table(["Stock","Entry","Status"],d.pending_triggers.map(t=>[esc(t.symbol),px(t.entry_trigger),esc(t.status)]),"No pending paper triggers.");
+ else {const f=await get(api+"/pretrade/archive");$("content").innerHTML='<h2>Paper execution</h2><div class="summary">'+[["Open",a.open_trades],["Closed",a.closed_trades],["Average P&L (points)",a.closed_trades?a.avg_pnl_points:"Not measured"]].map(([k,v])=>'<div>'+esc(k)+'<b>'+esc(v)+'</b></div>').join("")+'</div><h2>30-minute direction</h2>'+table(["Source","Published","Measured","Paired","Scanner correct","Market correct"],(f.direction_30m_by_source||[]).map(r=>[r.source,r.published,r.measured,r.paired,r.scanner_correct,r.market_correct].map(esc)),"No measured forecast comparisons yet.");}}
+}
+async function detail(symbol){selected=symbol;const s=setups.find(x=>x.symbol===symbol),dlg=$("detail");if(!dlg.open)dlg.showModal();
+ $("detailBody").innerHTML='<div class="eyebrow">STOCK DETAIL</div><h2 id="detailTitle">'+esc(symbol)+'</h2>';
+ if(!s){const d=await get(api+"/signals/"+encodeURIComponent(symbol));if(selected===symbol)$("detailBody").insertAdjacentHTML("beforeend",'<p>No ranked setup for this symbol.</p><dl><dt>Signal state</dt><dd>'+esc(d.state||"Not active")+'</dd><dt>Last observation</dt><dd>'+esc(d.last_seen_at||d.timestamp||"Not recorded")+'</dd><dt>Last price</dt><dd>'+px(d.last_price)+'</dd></dl>');return}
+ const fields=[["Outlook",direction(s)+" / 30 min"],["Setup",s.setup_type],["Entry condition",condition(s)],["Invalidation",px(s.stop_loss)],["T1 / T2",px(s.target1)+" / "+px(s.target2)],["Last observation",s.price_as_of],["Deadline",s.expires_at],["Selector score",s.final_selector_score??s.score],["Counter-evidence",[s.why_not_higher,s.missing_confirmation].flat().filter(Boolean)[0]||"Not recorded"]];
+ $("detailBody").insertAdjacentHTML("beforeend",'<span class="badge">'+esc(bands[s.scanner_band])+'</span><dl>'+fields.map(([k,v])=>'<dt>'+esc(k)+'</dt><dd>'+esc(v??"Not recorded")+'</dd>').join("")+'</dl>'+(s.setup_id?'<a class="link" href="'+hist+'?setup='+encodeURIComponent(s.setup_id)+'">Forecast #'+esc(s.setup_id)+' timeline &rarr;</a>':""))}
+function closeDetail(){if(history.state?.drawer)history.back();else{history.replaceState(null,"",scanUrl());syncDetail()}}
+function syncDetail(){const sym=location.pathname.match(/\/stock\/([^/]+)/)?.[1];if(sym)detail(decodeURIComponent(sym)).catch(()=>note("Stock data unavailable","Refresh to retry."));else{if($("detail").open)$("detail").close();if(!isHistory){scanner();document.querySelector('a[data-stock="'+CSS.escape(selected)+'"]')?.focus({preventScroll:true})}}}
+$("close").onclick=closeDetail;$("detail").oncancel=e=>{e.preventDefault();closeDetail()};window.onpopstate=syncDetail;
+$("content").onclick=e=>{const a=e.target.closest("a[data-stock]");if(!a||e.ctrlKey||e.metaKey)return;e.preventDefault();history.pushState({drawer:true},"",a.href);syncDetail()};
+async function load(force=false,healthOnly=false){if(loading)return;loading=true;try{
+ const h=await get(prefix?api+"/snapshot":"/api/health"),f=h.feed_connection||{},sim=prefix||h.mode==="simulated",t=f.last_verified_trade_epoch,age=Date.now()/1000-t;
+ const verified=!sim&&f.status==="live"&&t&&age>=0&&age<=15;
+ $("connection").textContent=sim?"Demo / simulated prices":verified?"Live / verified trades":f.status==="live"?"Live / stale or unverified":"Live / disconnected";
+ $("connection").className=verified?"good":"";$("tradeTime").textContent=t?fmtTime(t*1000):"None verified";
+ if(!prefix&&h.mode!=="simulated"&&(await get("/api/kotak/login-state")).state==="totp_required"){location.reload();return}
+ if(healthOnly)return;
+ if(isHistory)await historyView();else{const d=await get(api+"/pretrade/top"+(force?"?force=true":""));setups=d.setups||[];scanner();if(d.status==="fallback")$("connection").textContent="Cached snapshot / unverified";const sym=location.pathname.match(/\/stock\/([^/]+)/)?.[1];if(sym)await detail(decodeURIComponent(sym))}
+ $("refreshTime").textContent=fmtTime(Date.now())
+ }catch{note("Data unavailable","The latest request failed. Previously displayed values are not verified.");$("connection").textContent="Connection unavailable";$("connection").className=""}finally{loading=false}}
+$("refresh").onclick=()=>load(true);load();setInterval(()=>{if(!document.hidden)load(false,$("detail").open||!!document.querySelector("details[open]")||document.activeElement?.matches("select"))},15000);

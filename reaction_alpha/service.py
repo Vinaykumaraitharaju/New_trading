@@ -127,6 +127,7 @@ class ReactionAlphaService:
         self._selection_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._live_status = "idle"
+        self._last_verified_trade = None
         self._live_status_detail = "Waiting to initialize live feed"
 
     async def startup(self) -> None:
@@ -478,9 +479,13 @@ class ReactionAlphaService:
         ranked = self._scanner.output_engine.to_dataframe(synthetic_result, snapshots)
         setups = ranked.head(8).to_dict("records") if not ranked.empty else []
         for setup in setups:
+            setup["market_bias"] = market_context.market_bias if market_context else synthetic_result.market.bias.value
             self._enrich_pretrade_opportunity(setup)
             setup["scanner_band"] = self._pretrade_band(setup)
             setup["scanner_label"] = self._pretrade_label(setup)
+        generated_at = datetime.now()
+        source = "simulated" if self.config.simulated else source
+        self.paper_trades.archive_pretrade_setups(setups, generated_at=generated_at, source=source)
         band_priority = {
             "trade-ready": 0,
             "near-trigger": 1,
@@ -495,9 +500,6 @@ class ReactionAlphaService:
                 str(item.get("symbol") or ""),
             )
         )
-        generated_at = datetime.now()
-        self.paper_trades.update_pretrade_prices(quotes.to_dict("records"), timestamp=generated_at)
-        self.paper_trades.archive_pretrade_setups(setups, generated_at=generated_at, source=source)
         band_rows: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for setup in setups:
             band_rows[str(setup.get("scanner_band") or "watchlist").lower()].append(setup)
@@ -1418,6 +1420,19 @@ class ReactionAlphaService:
             raw=raw,
         )
 
+    @staticmethod
+    def _fresh_trade_time(tick: TickData) -> datetime | None:
+        # Arrival alone cannot distinguish a new trade from a replayed quote.
+        try:
+            epoch = float(tick.raw["last_trade_time"])
+            if epoch >= 1e12:
+                epoch /= 1000
+            traded = datetime.fromtimestamp(epoch)
+            age = (tick.timestamp - traded).total_seconds()
+            return traded if 0 <= age <= 15 else None
+        except (KeyError, ValueError, TypeError, OSError, OverflowError):
+            return None
+
     def process_tick(self, tick: TickData) -> TradeSignal | None:
         with self._lock:
             state = self.store.update_tick(tick)
@@ -1425,7 +1440,11 @@ class ReactionAlphaService:
                 self.paper_trades.force_market_close_if_needed(tick.timestamp)
             self.outcome_tracker.update_from_state(state)
             self.paper_trades.update_symbol(symbol=state.symbol, price=state.latest_price(), timestamp=tick.timestamp)
-            self.paper_trades.update_pretrade_price(symbol=state.symbol, price=state.latest_price(), timestamp=tick.timestamp)
+            observed = tick.timestamp if self.config.simulated else self._fresh_trade_time(tick)
+            if observed is not None:
+                if not self.config.simulated and (self._last_verified_trade is None or observed > self._last_verified_trade):
+                    self._last_verified_trade = observed
+                self.paper_trades.update_pretrade_price(symbol=tick.symbol, price=tick.price, timestamp=observed)
             event = self.event_engine.detect(state)
             if event:
                 state.add_event(event)
@@ -1713,6 +1732,7 @@ class ReactionAlphaService:
             "mode": "simulated" if self.config.simulated else "live",
             "feed_connection": {
                 "status": self._live_status,
+                "last_verified_trade_epoch": self._last_verified_trade.timestamp() if self._last_verified_trade else None,
                 "detail": self._live_status_detail,
             },
             "market_session": market_session,
