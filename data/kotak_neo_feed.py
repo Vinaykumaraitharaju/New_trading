@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import base64
+from concurrent.futures import Future
 from dataclasses import dataclass, field
 import hashlib
 import hmac
@@ -79,6 +81,7 @@ class KotakNeoFeed:
         self._ws_ready = threading.Event()
         self._stop_live = threading.Event()
         self._ws_lock = threading.RLock()
+        self._stream_stop = threading.Event()
         self._reconnect_thread: threading.Thread | None = None
         self._live_callback: Callable[[KotakLiveTick], None] | None = None
         self._close_callback: Callable[[str], None] | None = None
@@ -427,29 +430,8 @@ class KotakNeoFeed:
     def stop_live_feed(self) -> None:
         self._stop_live.set()
         self._ws_ready.clear()
-        client = self._client
-        if client is None:
-            return
-        try:
-            if self._subscriptions:
-                payload = [
-                    {
-                        "instrument_token": item["instrument_token"],
-                        "exchange_segment": item["exchange_segment"],
-                    }
-                    for item in self._subscriptions
-                ]
-                client.un_subscribe(payload, isIndex=getattr(self, "_subscriptions_are_index", False))
-        except Exception:
-            pass
-        try:
-            if getattr(client, "NeoWebSocket", None) is not None:
-                socket_obj = client.NeoWebSocket
-                if getattr(socket_obj, "hsWebsocket", None) is not None:
-                    socket_obj.hsWebsocket.close()
-                client.NeoWebSocket = None
-        except Exception:
-            pass
+        with self._ws_lock:
+            self._stream_stop.set()
 
     def get_latest_live_ticks(self) -> dict[str, KotakLiveTick]:
         return dict(self._latest_ticks)
@@ -728,34 +710,73 @@ class KotakNeoFeed:
                 os.environ.pop(name, None)
 
     def _subscribe_live(self, wait_timeout: float) -> None:
+        from neo_api_client.websocket.feed import WsToken
+
         client = self.client()
-        self._ws_ready.clear()
+        started = Future()
+        stop = threading.Event()
         with self._ws_lock:
-            client.on_message = self._handle_ws_message
-            client.on_open = self._handle_ws_open
-            client.on_close = self._handle_ws_close
-            client.on_error = self._handle_ws_error
-            if getattr(client, "NeoWebSocket", None) is not None:
-                try:
-                    socket_obj = client.NeoWebSocket
-                    if getattr(socket_obj, "hsWebsocket", None) is not None:
-                        socket_obj.hsWebsocket.close()
-                except Exception:
-                    pass
-                client.NeoWebSocket = None
+            self._stream_stop.set()
+            self._stream_stop = stop
+            self._ws_ready.clear()
+        stocks, indices = [], []
+        for item in self._subscriptions:
+            group = indices if item.get("is_index") else stocks
+            group.append(WsToken(item["exchange_segment"], item["instrument_token"]))
 
-            payload = [
-                {
-                    "instrument_token": item["instrument_token"],
-                    "exchange_segment": item["exchange_segment"],
-                }
-                for item in self._subscriptions
-            ]
-            self.logger.info("Subscribing to %d instrument(s): %s", len(payload), payload)
-            client.subscribe(instrument_tokens=payload, isIndex=getattr(self, "_subscriptions_are_index", False))
+        async def consume():
+            async with client.create_websocket() as ws:
+                if stocks:
+                    await ws.subscribe_scrips(stocks)
+                if indices:
+                    await ws.subscribe_index(indices)
+                if stop.is_set():
+                    return
+                self._handle_ws_open("subscribed")
+                started.set_result(None)
+                async for msg in ws:
+                    if stop.is_set():
+                        return
+                    row = msg.model_dump()
+                    row.update(v=row.get("volume_traded_today"), ap=row.get("average_trade_price"),
+                               c=row.get("close_price"))
+                    for side, price, qty in (("buy", "bp", "bq"), ("sell", "sp", "sq")):
+                        if row.get(side):
+                            row[price] = row[side][0].get("price")
+                            row[qty] = row[side][0].get("quantity")
+                    self._handle_ws_message([row])
 
-        if not self._ws_ready.wait(timeout=wait_timeout):
-            raise RuntimeError(f"Timed out waiting for Kotak live websocket open after {wait_timeout:.0f}s.")
+        async def run_until_stopped():
+            task = asyncio.create_task(consume())
+            try:
+                while not stop.is_set() and not task.done():
+                    await asyncio.wait([task], timeout=0.25)
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            if not stop.is_set():
+                task.result()
+                raise ConnectionError("Kotak market feed closed")
+
+        def worker():
+            try:
+                asyncio.run(run_until_stopped())
+            except Exception as exc:
+                if not started.done():
+                    started.set_exception(exc)
+                elif not stop.is_set():
+                    self._handle_ws_error(exc)
+            finally:
+                if not started.done():
+                    started.set_exception(RuntimeError("Kotak subscription stopped"))
+
+        threading.Thread(target=worker, daemon=True, name="kotak-market-feed").start()
+        try:
+            started.result(timeout=wait_timeout)
+        except Exception:
+            stop.set()
+            raise
 
     def _handle_ws_open(self, message: Any) -> None:
         self._ws_ready.set()

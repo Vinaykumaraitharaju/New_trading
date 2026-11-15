@@ -40,4 +40,4 @@ Optional Telegram alerts:
 - Render provides the public app URL after the first successful deploy.
 - The free web-service plan can sleep when idle, so use a paid instance for serious live-market use.
 - Paper-trade data uses `/tmp` on Render in this config, so it is not persistent across restarts.
-- Kotak live mode requires the Kotak Neo SDK, which is installed from GitHub through `requirements.txt`.
+- Kotak live mode uses the official `kotakneoapi` PyPI package pinned in `requirements.txt`. When migrating from the legacy Git-installed SDK, clear the Render build cache and deploy once so the two packages do not share an import directory.
