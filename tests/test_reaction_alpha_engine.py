@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 import tempfile
 import unittest
 
@@ -181,6 +182,26 @@ def test_active_signal_allows_new_trade_levels_for_changed_claim() -> None:
     assert refreshed.sl == 102.0
     assert refreshed.t1 == 99.0
     assert refreshed.t2 == 97.0
+
+
+def test_live_page_login_state_only_requests_actionable_manual_totp() -> None:
+    service = _build_service()
+    feed = KotakNeoFeed(consumer_key="test", mobile_number="9876543210", ucc="test", mpin="test")
+    service._router = SimpleNamespace(kotak=feed)
+    feed.auth_status = "missing_credentials"
+    assert service.kotak_login_state() == "not_required"
+    service.config.simulated = False
+    service._live_status = "connecting"
+    assert service.kotak_login_state() == "connecting"
+    service._live_status = "error"
+    assert service.kotak_login_state() == "totp_required"
+    feed.auth_status = "restored_session"
+    assert service.kotak_login_state() == "not_required"
+    feed.auth_status = "totp_required"
+    service._live_status = "live"
+    assert service.kotak_login_state() == "totp_required"
+    feed.mpin = None
+    assert service.kotak_login_state() == "not_required"
 
 
 def test_kotak_permanent_totp_secret_wins_over_stale_manual_code() -> None:

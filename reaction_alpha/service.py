@@ -934,6 +934,19 @@ class ReactionAlphaService:
                 return value
         return 0.0
 
+    def kotak_login_state(self) -> str:
+        if self.config.simulated or self._router is None:
+            return "not_required"
+        if self._live_status in {"connecting", "idle"}:
+            return "connecting"
+        feed = self._router.kotak
+        fields = feed.required_login_fields()
+        manual = not feed.totp_secret or (feed.totp_secret.isdigit() and len(feed.totp_secret) == 6)
+        if manual and all(ok for key, ok in fields.items() if key != "KOTAK_TOTP_SECRET_OR_UI_TOTP"):
+            if feed.auth_status in {"totp_required", "missing_credentials"}:
+                return "totp_required"
+        return "not_required"
+
     def submit_kotak_totp(self, totp_code: str) -> dict[str, Any]:
         code = str(totp_code or "").strip()
         if not (code.isdigit() and len(code) == 6):

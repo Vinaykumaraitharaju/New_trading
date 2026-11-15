@@ -34,7 +34,7 @@ KOTAK_LOGIN_HTML = """<!doctype html>
 <body>
   <main>
     <h1>Kotak Login</h1>
-    <p>Enter the current 6-digit authenticator code after the app is deployed in live mode.</p>
+    <p>Enter your current authenticator code to open this page with the live feed.</p>
     <form id="form">
       <label for="totp">Current TOTP</label>
       <input id="totp" name="totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" required />
@@ -42,7 +42,7 @@ KOTAK_LOGIN_HTML = """<!doctype html>
       <input id="secret" name="secret" type="password" autocomplete="current-password" />
       <button type="submit">Start Kotak Live Feed</button>
     </form>
-    <pre id="result"></pre>
+    <pre id="result" role="status"></pre>
     <p style="margin-top:18px"><a href="/">Back to dashboard</a></p>
   </main>
   <script>
@@ -55,13 +55,24 @@ KOTAK_LOGIN_HTML = """<!doctype html>
       const secret = new FormData(form).get("secret");
       const headers = { "Content-Type": "application/json" };
       if (secret) headers["X-Reaction-Alpha-Secret"] = secret;
+      const button = form.querySelector("button");
+      button.disabled = true;
+      try {
       const response = await fetch("/api/kotak/totp", {
         method: "POST",
         headers,
         body: JSON.stringify({ totp_code: totp })
       });
       const payload = await response.json();
-      result.textContent = payload.message || JSON.stringify(payload, null, 2);
+      if (!response.ok || !payload.ok) throw new Error(payload.detail || payload.message || "Login failed.");
+      form.reset();
+      if (location.pathname === "/kotak-login") location.replace("/");
+      else location.reload();
+      } catch (err) {
+        result.textContent = err.message || "Could not reach Kotak. Please try again.";
+      } finally {
+        button.disabled = false;
+      }
     });
   </script>
 </body>
@@ -136,17 +147,9 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
     ul { margin:8px 0 0; padding-left:18px; color:#c7d0df; line-height:1.5; }
     .empty { padding:24px; color:var(--muted); border:1px dashed var(--line); border-radius:14px; }
     .live-strip { display:flex; align-items:center; gap:10px; margin-top:10px; color:var(--muted); font-size:12px; }
-    .kotak-login { display:grid; grid-template-columns: 132px minmax(160px, 1fr) auto; gap:8px; align-items:center; margin-top:12px; max-width:560px; }
-    .kotak-login input { min-width:0; height:38px; border:1px solid var(--line); border-radius:10px; background:rgba(0,0,0,.22); color:var(--text); padding:0 11px; font:inherit; }
-    .kotak-login input[name="totp"] { font-weight:800; letter-spacing:.12em; }
-    .kotak-login .btn { height:38px; padding:0 13px; }
-    .kotak-login-status { margin-top:7px; min-height:18px; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
-    .kotak-login-status.good { color:var(--bull); }
-    .kotak-login-status.bad { color:var(--bear); }
     .pulse { width:10px; height:10px; border-radius:999px; background:var(--bull); box-shadow:0 0 0 0 rgba(0,255,178,.55); animation:pulse 1.4s infinite; }
     @keyframes pulse { 0% { box-shadow:0 0 0 0 rgba(0,255,178,.55); } 70% { box-shadow:0 0 0 10px rgba(0,255,178,0); } 100% { box-shadow:0 0 0 0 rgba(0,255,178,0); } }
     @media (max-width: 1000px) { .grid, .card, .detail-body { grid-template-columns:1fr; } .detail-grid, .detail-two { grid-template-columns:1fr; } }
-    @media (max-width: 720px) { .kotak-login { grid-template-columns:1fr; } .kotak-login .btn { width:100%; } }
     @media (max-width: 1100px) { .summary-grid { grid-template-columns:repeat(2, minmax(0,1fr)); } }
   </style>
 </head>
@@ -157,12 +160,6 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         <h1>Pre-Trade Setup Scanner</h1>
         <div class="muted">Upcoming trades ranked by market context, sector strength, price structure, candles, volume, VWAP, risk/reward, and fakeout risk.</div>
         <div class="live-strip"><span class="pulse"></span><span id="liveStatus">Live scan ready</span><span id="countdown"></span></div>
-        <form class="kotak-login" id="kotakLoginForm">
-          <input id="kotakTotp" name="totp" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" placeholder="Kotak TOTP" aria-label="Kotak TOTP" required />
-          <input id="kotakSecret" name="secret" type="password" autocomplete="current-password" placeholder="Admin secret" aria-label="Admin secret" />
-          <button class="btn primary" type="submit">Start Kotak</button>
-        </form>
-        <div class="kotak-login-status" id="kotakLoginStatus"></div>
         <div class="summary-grid" id="summaryGrid"></div>
       </div>
       <div class="nav">
@@ -248,45 +245,6 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
         if (setup && setup.symbol) setupMemory.set(String(setup.symbol).toUpperCase(), setup);
       });
       renderObservedList();
-    }
-    async function submitKotakLogin(event) {
-      event.preventDefault();
-      const form = event.currentTarget;
-      const status = document.getElementById("kotakLoginStatus");
-      const button = form.querySelector("button");
-      const formData = new FormData(form);
-      const totp = String(formData.get("totp") || "").trim();
-      const secret = String(formData.get("secret") || "").trim();
-      if (!/^[0-9]{6}$/.test(totp)) {
-        status.className = "kotak-login-status bad";
-        status.textContent = "Enter the current 6-digit Kotak TOTP.";
-        return;
-      }
-      status.className = "kotak-login-status";
-      status.textContent = "Submitting Kotak login...";
-      button.disabled = true;
-      try {
-        const headers = { "Content-Type": "application/json" };
-        if (secret) headers["X-Reaction-Alpha-Secret"] = secret;
-        const response = await fetch("/api/kotak/totp", {
-          method: "POST",
-          headers,
-          body: JSON.stringify({ totp_code: totp })
-        });
-        const payload = await response.json();
-        if (!response.ok || payload.ok === false) {
-          throw new Error(payload.detail || payload.message || "Kotak login failed.");
-        }
-        status.className = "kotak-login-status good";
-        status.textContent = payload.message || "Kotak live feed started.";
-        form.reset();
-        load(true);
-      } catch (err) {
-        status.className = "kotak-login-status bad";
-        status.textContent = err.message || "Kotak login failed.";
-      } finally {
-        button.disabled = false;
-      }
     }
     function signalWarnings(s) {
       const missing = unique([
@@ -573,7 +531,6 @@ PRETRADE_SCANNER_HTML = """<!doctype html>
       }
     }
     document.getElementById("refreshBtn").addEventListener("click", () => load(true));
-    document.getElementById("kotakLoginForm").addEventListener("submit", submitKotakLogin);
     document.getElementById("setups").addEventListener("click", (event) => {
       const card = event.target.closest(".card");
       if (card?.dataset?.symbol) openDetail(card.dataset.symbol);
@@ -3976,9 +3933,44 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     async def reset_paper_trades_all() -> dict[str, Any]:
         return service.reset_paper_trades(today_only=False)
 
+    @app.get("/api/kotak/login-state")
+    async def kotak_login_state() -> dict[str, str]:
+        return {"state": service.kotak_login_state()}
+
+    def live_page(html: str) -> str:
+        state = service.kotak_login_state()
+        if state == "totp_required":
+            return KOTAK_LOGIN_HTML
+        if state == "connecting":
+            return """<!doctype html><html lang="en"><title>Kotak connection</title>
+            <p role="status">Checking your Kotak session...</p><script>
+            async function check() {
+              try {
+                const res = await fetch('/api/kotak/login-state', {cache:'no-store'});
+                if (res.ok && (await res.json()).state !== 'connecting') {
+                  location.reload(); return;
+                }
+              } catch (_) {}
+              setTimeout(check, 1500);
+            }
+            check();</script></html>"""
+        if service.config.simulated:
+            return html
+        return html.replace("</body>", """<script>
+          async function checkKotakOnReturn() {
+            if (document.hidden) return;
+            try {
+              const res = await fetch('/api/kotak/login-state', {cache:'no-store'});
+              if (res.ok && (await res.json()).state === 'totp_required') location.reload();
+            } catch (_) {}
+          }
+          document.addEventListener('visibilitychange', checkKotakOnReturn);
+          window.addEventListener('pageshow', event => { if (event.persisted) checkKotakOnReturn(); });
+        </script></body>""")
+
     @app.get("/", response_class=HTMLResponse)
     async def dashboard() -> str:
-        return UI_HTML
+        return live_page(UI_HTML)
 
     @app.get("/kotak-login", response_class=HTMLResponse)
     async def kotak_login() -> str:
@@ -3986,15 +3978,15 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
 
     @app.get("/pre-trade-scanner", response_class=HTMLResponse)
     async def pretrade_scanner() -> str:
-        return PRETRADE_SCANNER_HTML
+        return live_page(PRETRADE_SCANNER_HTML)
 
     @app.get("/pretrade/archive", response_class=HTMLResponse)
     async def pretrade_archive_page() -> str:
-        return pretrade_archive_html("/api/pretrade/archive", "/pre-trade-scanner", "/")
+        return live_page(pretrade_archive_html("/api/pretrade/archive", "/pre-trade-scanner", "/"))
 
     @app.get("/journal", response_class=HTMLResponse)
     async def journal() -> str:
-        return paper_html("/api/paper-trades", "/", "/api/paper-trades/reset-today", "/api/paper-trades/reset-all", "/journal/analytics")
+        return live_page(paper_html("/api/paper-trades", "/", "/api/paper-trades/reset-today", "/api/paper-trades/reset-all", "/journal/analytics"))
 
     @app.get("/demo", response_class=HTMLResponse)
     async def demo_dashboard() -> str:
@@ -4010,7 +4002,7 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
 
     @app.get("/journal/analytics", response_class=HTMLResponse)
     async def journal_analytics() -> str:
-        return analytics_html("/api/paper-trades", "/journal", "/")
+        return live_page(analytics_html("/api/paper-trades", "/journal", "/"))
 
     @app.get("/demo/journal/analytics", response_class=HTMLResponse)
     async def demo_journal_analytics() -> str:
@@ -4018,7 +4010,7 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
 
     @app.get("/stock/{symbol}", response_class=HTMLResponse)
     async def stock_detail(symbol: str) -> str:
-        return detail_html(symbol, f"/api/signals/{symbol.upper()}", "/")
+        return live_page(detail_html(symbol, f"/api/signals/{symbol.upper()}", "/"))
 
     @app.get("/demo/stock/{symbol}", response_class=HTMLResponse)
     async def demo_stock_detail(symbol: str) -> str:

@@ -26,7 +26,7 @@ Then change:
 - `REACTION_ALPHA_SIMULATED=false`
 - `REACTION_ALPHA_SIM_ALWAYS_OPEN=false`
 
-After Render redeploys, the app can automatically generate fresh TOTP codes if `KOTAK_TOTP_SECRET` contains the permanent authenticator setup key. If you do not set that key, open `/kotak-login` on your Render app URL and enter the current 6-digit authenticator code. If `REACTION_ALPHA_WEBHOOK_SECRET` is set, enter that same value in the admin secret field.
+After Render redeploys, the app can automatically generate fresh TOTP codes if `KOTAK_TOTP_SECRET` contains the permanent authenticator setup key. Keep this key in Render secrets, never in Git. For manual login, leave it unset. Open any live page: if Kotak needs a code, the page shows the login form first and resumes at the same URL after login. A restored session or simulated page does not need a code. Set `REACTION_ALPHA_WEBHOOK_SECRET` on a public deployment and enter that value in the admin secret field for manual login.
 
 `KOTAK_TOTP_SECRET` must be the permanent authenticator setup key, not the current 6-digit code shown in the authenticator app. A 6-digit code expires quickly and cannot keep Kotak always available after a redeploy, restart, or screen lock.
 

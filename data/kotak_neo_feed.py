@@ -495,6 +495,7 @@ class KotakNeoFeed:
             if secret.isdigit() and len(secret) == 6:
                 if code.isdigit() and len(code) == 6:
                     return code
+                self.auth_status = "totp_required"
                 raise RuntimeError(
                     "KOTAK_TOTP_SECRET must be the permanent authenticator setup key, not a current 6-digit TOTP code. "
                     "Enter a fresh code in /kotak-login or replace KOTAK_TOTP_SECRET with the setup key for automatic re-login."
