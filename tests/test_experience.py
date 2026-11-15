@@ -92,3 +92,18 @@ def test_turso_batch_rejects_partial_success_and_hides_credentials(monkeypatch):
     assert options["json"]["requests"][0]["stmt"]["args"] == [{"type":"text","value":"one"},{"type":"null"}]
     with pytest.raises(ValueError):
         Turso("https://example.invalid","secret")
+
+
+@pytest.mark.parametrize("url,token", [
+    ("libsql://example.turso.io", ""), ("", "sensitive-value"), ("bad-url", "sensitive-value"),
+])
+def test_invalid_optional_cloud_settings_do_not_prevent_app_boot(tmp_path, monkeypatch, caplog, url, token):
+    from reaction_alpha.api import create_app
+
+    monkeypatch.setenv("TURSO_DATABASE_URL", url)
+    monkeypatch.setenv("TURSO_AUTH_TOKEN", token)
+    app = create_app(ReactionAlphaConfig(simulated=True, paper_trade_db_path=str(tmp_path/"paper.db")))
+    memory = app.state.reaction_alpha.paper_trades.experience
+    memory.sync()
+    assert memory.report()["storage"] == "Local only: invalid Turso configuration"
+    assert "sensitive-value" not in caplog.text

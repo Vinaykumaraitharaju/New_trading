@@ -73,6 +73,7 @@ class Experience:
         self.day = None
         self.last_sync = None
         self.state = "Local only"
+        self.local_status = "Local only"
         self.guard = threading.Lock()
         self.stop = threading.Event()
         self.wake = threading.Event()
@@ -82,7 +83,17 @@ class Experience:
     def configure_cloud(self):
         url, token = os.getenv("TURSO_DATABASE_URL"), os.getenv("TURSO_AUTH_TOKEN")
         if url or token:
-            self.remote = Turso(url or "", token or "")
+            try:
+                self.remote = Turso((url or "").strip(), (token or "").strip())
+            except ValueError:
+                self.remote = None
+                self.local_status = "Local only: invalid Turso configuration"
+                self.state = self.local_status
+                logging.getLogger(__name__).warning(
+                    "Cloud memory disabled: check TURSO_DATABASE_URL and TURSO_AUTH_TOKEN. "
+                    "Local examples are not protected across redeploys."
+                )
+                return
             self.state = "Awaiting cloud sync"
 
     def sync(self, today=None):
@@ -111,7 +122,7 @@ class Experience:
         with self.guard:
             self.groups = {(r["source"],r["setup"],r["direction"]):dict(r) for r in rows}
             self.day = today
-            self.state = "Cloud connected" if self.remote else "Local only"
+            self.state = "Cloud connected" if self.remote else self.local_status
             self.last_sync = datetime.now(IST).isoformat(timespec="seconds")
 
     def start(self):
