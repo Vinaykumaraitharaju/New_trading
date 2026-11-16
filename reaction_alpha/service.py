@@ -4,6 +4,7 @@ import asyncio
 from collections import defaultdict
 from datetime import datetime, time as dt_time, timedelta
 import logging
+from math import isfinite
 import random
 import threading
 import time
@@ -42,6 +43,7 @@ from .state import InMemoryMarketStore, SymbolState
 from .trade_levels import build_trade_levels, resolve_trade_state
 from .engines.scoring_engine import UnifiedScore
 from .market_strip import MarketStrip, NAMES
+from .demo_tape import trade_arrivals
 
 log = logging.getLogger(__name__)
 
@@ -1220,42 +1222,41 @@ class ReactionAlphaService:
         totals = defaultdict(float)
         phases = {symbol: random.uniform(0.0, math.tau) for symbol in anchors}
         self._seed_simulation_history(anchors, prices, totals, phases)
-        while not self._stop_event.is_set():
-            for symbol, price in list(prices.items()):
-                anchor = anchors[symbol]
-                phase = phases[symbol]
-                is_index = symbol in {"NIFTY", "BANKNIFTY", "SENSEX"}
-                wave_span = anchor * (0.0045 if is_index else 0.0085)
-                noise_span = anchor * (0.0007 if is_index else 0.0012)
-                mean_reversion = (anchor - price) * 0.08
-                cyclic_push = math.sin(phase) * wave_span
-                noise = random.uniform(-noise_span, noise_span)
-                new_price = max(5.0, price + mean_reversion + (cyclic_push * 0.18) + noise)
-                max_deviation = anchor * (0.018 if is_index else 0.028)
-                new_price = max(anchor - max_deviation, min(anchor + max_deviation, new_price))
-                prices[symbol] = new_price
-                phases[symbol] = phase + random.uniform(0.08, 0.18)
-                totals[symbol] += random.randint(1200, 16000)
-                bid = new_price - random.uniform(0.02, 0.12)
-                ask = new_price + random.uniform(0.02, 0.12)
-                tick = TickData(
-                    symbol=symbol,
-                    instrument_token=f"SIM-{symbol}",
-                    exchange_segment="bse_cm" if symbol == "SENSEX" else self.config.exchange_segment,
-                    timestamp=datetime.now(),
-                    price=round(new_price, 2),
-                    volume=totals[symbol],
-                    bid=round(bid, 2),
-                    ask=round(ask, 2),
-                    bid_size=random.randint(800, 5000),
-                    ask_size=random.randint(800, 5000),
-                    vwap=new_price,
-                    raw={"simulated": True},
-                )
-                if not self.store.get(symbol).previous_close:
-                    self.store.register_previous_levels(symbol, anchor, anchor * 1.01, anchor * 0.99)
-                self.process_tick(tick)
-            time.sleep(0.25)
+        for symbol in trade_arrivals(prices, self._stop_event):
+            price = prices[symbol]
+            anchor = anchors[symbol]
+            phase = phases[symbol]
+            is_index = symbol in {"NIFTY", "BANKNIFTY", "SENSEX"}
+            wave_span = anchor * (0.0045 if is_index else 0.0085)
+            noise_span = anchor * (0.0007 if is_index else 0.0012)
+            mean_reversion = (anchor - price) * 0.08
+            cyclic_push = math.sin(phase) * wave_span
+            noise = random.uniform(-noise_span, noise_span)
+            new_price = max(5.0, price + mean_reversion + (cyclic_push * 0.18) + noise)
+            max_deviation = anchor * (0.018 if is_index else 0.028)
+            new_price = max(anchor - max_deviation, min(anchor + max_deviation, new_price))
+            prices[symbol] = new_price
+            phases[symbol] = phase + random.uniform(0.08, 0.18)
+            totals[symbol] += random.randint(1200, 16000)
+            bid = new_price - random.uniform(0.02, 0.12)
+            ask = new_price + random.uniform(0.02, 0.12)
+            tick = TickData(
+                symbol=symbol,
+                instrument_token=f"SIM-{symbol}",
+                exchange_segment="bse_cm" if symbol == "SENSEX" else self.config.exchange_segment,
+                timestamp=datetime.now(),
+                price=round(new_price, 2),
+                volume=totals[symbol],
+                bid=round(bid, 2),
+                ask=round(ask, 2),
+                bid_size=random.randint(800, 5000),
+                ask_size=random.randint(800, 5000),
+                vwap=new_price,
+                raw={"simulated": True},
+            )
+            if not self.store.get(symbol).previous_close:
+                self.store.register_previous_levels(symbol, anchor, anchor * 1.01, anchor * 0.99)
+            self.process_tick(tick)
 
     def _seed_simulation_history(
         self,
@@ -1410,8 +1411,8 @@ class ReactionAlphaService:
         symbol = str(tick.symbol or "").upper().strip()
         if not symbol:
             return None
-        bid = safe_float(raw.get("bp") or raw.get("best_bid_price") or raw.get("bid") or raw.get("bPrice"), tick.ltp)
-        ask = safe_float(raw.get("sp") or raw.get("best_ask_price") or raw.get("ask") or raw.get("sPrice"), tick.ltp)
+        bid = safe_float(raw.get("bp") or raw.get("best_bid_price") or raw.get("bid") or raw.get("bPrice"))
+        ask = safe_float(raw.get("sp") or raw.get("best_ask_price") or raw.get("ask") or raw.get("sPrice"))
         bid_size = safe_float(raw.get("bq") or raw.get("bid_qty") or raw.get("best_bid_qty") or raw.get("bQty"))
         ask_size = safe_float(raw.get("sq") or raw.get("ask_qty") or raw.get("best_ask_qty") or raw.get("sQty"))
         volume = safe_float(raw.get("volume") or raw.get("traded_volume") or raw.get("v") or raw.get("ttq"))
@@ -1426,8 +1427,8 @@ class ReactionAlphaService:
             timestamp=datetime.now(),
             price=safe_float(tick.ltp),
             volume=volume,
-            bid=bid if bid > 0 else safe_float(tick.ltp),
-            ask=ask if ask > 0 else safe_float(tick.ltp),
+            bid=bid,
+            ask=ask,
             bid_size=bid_size,
             ask_size=ask_size,
             vwap=vwap if vwap > 0 else safe_float(tick.ltp),
@@ -1435,10 +1436,10 @@ class ReactionAlphaService:
         )
 
     @staticmethod
-    def _fresh_trade_time(tick: TickData) -> datetime | None:
+    def _fresh_trade_time(tick: TickData, field: str = "last_trade_time") -> datetime | None:
         # Arrival alone cannot distinguish a new trade from a replayed quote.
         try:
-            epoch = float(tick.raw["last_trade_time"])
+            epoch = float(tick.raw[field])
             if epoch >= 1e12:
                 epoch /= 1000
             traded = datetime.fromtimestamp(epoch)
@@ -1453,17 +1454,30 @@ class ReactionAlphaService:
                 receipt = tick.timestamp.timestamp()
                 self.market_strip.observe(tick.symbol, tick.price, receipt if self.config.simulated else tick.raw.get("last_trade_time"),
                                           self.store.get(tick.symbol).previous_close if self.config.simulated else tick.raw.get("close_price"), receipt)
+            simulated = self.config.simulated
+            observed = tick.timestamp if simulated else self._fresh_trade_time(tick)
+            executable = simulated
+            if not simulated:
+                if not self._router or not self._router.kotak.stream_connected or observed is None:
+                    return None
+                book_time = self._fresh_trade_time(tick, "last_update_time")
+                executable = (tick.symbol not in NAMES and book_time is not None
+                              and isfinite(tick.ask) and 0 < tick.bid <= tick.ask
+                              and tick.bid_size > 0 and tick.ask_size > 0)
+            if not self._remember_ticker(tick.symbol, tick.price, observed.timestamp(), tick.volume, executable):
+                return None
             state = self.store.update_tick(tick)
-            if not self.config.simulated_market_always_open:
+            if simulated and not self.config.simulated_market_always_open:
                 self.paper_trades.force_market_close_if_needed(tick.timestamp)
             self.outcome_tracker.update_from_state(state)
-            self.paper_trades.update_symbol(symbol=state.symbol, price=state.latest_price(), timestamp=tick.timestamp)
-            observed = tick.timestamp if self.config.simulated else self._fresh_trade_time(tick)
-            if observed is not None:
-                self._remember_ticker(tick.symbol, tick.price, observed.timestamp())
-                if not self.config.simulated and (self._last_verified_trade is None or observed > self._last_verified_trade):
-                    self._last_verified_trade = observed
-                self.paper_trades.update_pretrade_price(symbol=tick.symbol, price=tick.price, timestamp=observed)
+            book = {"bid": tick.bid, "ask": tick.ask}
+            close_only = not simulated and observed.astimezone(ZoneInfo("Asia/Kolkata")).time() >= dt_time(15, 20)
+            if executable:
+                self.paper_trades.update_symbol(symbol=tick.symbol, price=tick.price, timestamp=observed,
+                                               close_only=close_only, **book)
+            if not simulated and (self._last_verified_trade is None or observed > self._last_verified_trade):
+                self._last_verified_trade = observed
+            self.paper_trades.update_pretrade_price(symbol=tick.symbol, price=tick.price, timestamp=observed)
             event = self.event_engine.detect(state)
             if event:
                 state.add_event(event)
@@ -1475,8 +1489,10 @@ class ReactionAlphaService:
                 state.latest_signal = signal
                 trade_direction = self._trade_direction(signal)
                 self.outcome_tracker.register_signal(signal, direction=trade_direction)
-                self.paper_trades.register_signal(signal, direction=trade_direction)
-                self.paper_trades.update_symbol(symbol=state.symbol, price=state.latest_price(), timestamp=tick.timestamp)
+                if not close_only and (simulated or tick.symbol not in NAMES):
+                    self.paper_trades.register_signal(signal, direction=trade_direction)
+                    if simulated:
+                        self.paper_trades.update_symbol(symbol=tick.symbol, price=tick.price, timestamp=observed, **book)
                 self._maybe_alert(signal)
             elif state.symbol in self._signals:
                 del self._signals[state.symbol]
@@ -1729,10 +1745,14 @@ class ReactionAlphaService:
             )
         return cards
 
-    def _remember_ticker(self, symbol, price, epoch):
+    def _remember_ticker(self, symbol, price, epoch, volume=0, executable=False):
         with self._quote_lock:
-            if price > 0 and epoch > self._ticker_prices.get(symbol, {}).get("epoch", 0):
-                self._ticker_prices[symbol] = {"price": price, "epoch": epoch}
+            prev = self._ticker_prices.get(symbol)
+            if not isfinite(price) or price <= 0 or (prev and (epoch < prev["epoch"] or
+                    (epoch == prev["epoch"] and not (0 < prev["volume"] < volume)))):
+                return False
+            self._ticker_prices[symbol] = dict(price=price, epoch=epoch, volume=volume, executable=executable)
+            return True
 
     def market_strip_snapshot(self):
         connected = self._router is not None and self._router.kotak.stream_connected
@@ -1741,14 +1761,16 @@ class ReactionAlphaService:
         rows = (self._pretrade_cache or {}).get("setups", [])
         with self._quote_lock:
             data["quotes"] = {
-                s["symbol"]: {**q, "status": "stale" if not 0 <= now-q["epoch"] <= 15 else
+                s["symbol"]: {"price": q["price"], "epoch": q["epoch"],
+                              **({} if self.config.simulated else {"has_book": q["executable"]}),
+                              "status": "stale" if not 0 <= now-q["epoch"] <= 15 else
                               "simulated" if self.config.simulated else "live" if connected else "stale"}
                 for s in rows if (q := self._ticker_prices.get(s["symbol"]))
             }
         return data
 
     def snapshot(self) -> dict[str, Any]:
-        if not self.config.simulated_market_always_open:
+        if self.config.simulated and not self.config.simulated_market_always_open:
             self.paper_trades.force_market_close_if_needed()
         fresh_signals: list[TradeSignal] = []
         for symbol, signal in list(self._signals.items()):

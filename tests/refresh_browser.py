@@ -23,6 +23,7 @@ async def run():
                 "ABC":{"price":100+len(pulses),"epoch":1770000000+len(pulses),"status":"simulated"}}})
         await page.route("**/api/demo/pretrade/top*",scan)
         await page.route("**/api/demo/market-strip",pulse)
+        await page.route("**/api/demo/market-strip/stream",lambda route:route.abort())
         await page.goto(os.getenv("WORKSPACE_URL","http://127.0.0.1:8084")+"/demo")
         await asyncio.wait_for(started.wait(),15)
         await page.locator("#refresh").click()

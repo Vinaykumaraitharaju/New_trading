@@ -82,7 +82,7 @@ let stripBusy=false,lastQuotes=new Map();
 function paintTicker(){
  document.querySelectorAll("[data-price]").forEach(el=>{
    const q=ticker[el.dataset.price];if(!q||q.epoch<scanStarted)return;
-   const value=px(q.price),label=q.status+" | "+fmtTime(q.epoch*1000);
+   const value=px(q.price),label=q.status+" | "+fmtTime(q.epoch*1000)+(q.status==="live"&&q.has_book===false?" | No verified bid/ask":"");
    if(el.textContent!==value)el.textContent=value;
    if(el.nextElementSibling.textContent!==label)el.nextElementSibling.textContent=label;
  });
@@ -93,17 +93,35 @@ function paintQuotes(rows){
    return '<div class="index-quote"><div class="index-head"><b>'+esc(r.name)+'</b><span class="badge '+(r.status==="live"?"ready":"")+'">'+esc(r.status)+'</span></div><div class="index-values"><b class="'+(changed?"price-update":"")+'">'+(r.level==null?"&mdash;":levelFmt.format(r.level))+'</b><span class="'+(r.change>0?"up":r.change<0?"down":"")+'">'+(r.change==null?"Change unavailable":signedFmt.format(r.change)+" ("+signedFmt.format(r.percent)+"%)")+'</span></div><small>'+(r.epoch?esc(indexStamp.format(r.epoch*1000))+" IST":"No timestamped quote")+'</small></div>';
  }).join("");lastQuotes=new Map(rows.map(r=>[r.name,r]));
 }
+function renderStrip(d){
+ $("cashSession").textContent="NSE cash session: "+d.session;
+ $("scanActivity").textContent=d.scan?"Last scan: "+indexStamp.format(d.scan.epoch*1000)+" IST | "+d.scan.symbols+" symbols":"No completed scan yet";
+ paintQuotes(d.indices);ticker=d.quotes||{};paintTicker();
+}
+let quoteStream=null,streamReady=false;
+function connectQuoteStream(){
+ if(!("EventSource" in window)||document.hidden||quoteStream)return;
+ const stream=quoteStream=new EventSource(api+"/market-strip/stream");
+ stream.onmessage=e=>{if(stream!==quoteStream)return;renderStrip(JSON.parse(e.data));streamReady=true};
+ stream.onerror=()=>{if(stream===quoteStream){streamReady=false;updateStrip()}};
+}
 async function updateStrip(){
+ if(streamReady)return;
  if(stripBusy||document.hidden)return;stripBusy=true;
  try{const d=await get(api+"/market-strip",{signal:AbortSignal.timeout(5000)});
-   $("cashSession").textContent="NSE cash session: "+d.session;
-   $("scanActivity").textContent=d.scan?"Last scan: "+indexStamp.format(d.scan.epoch*1000)+" IST | "+d.scan.symbols+" symbols":"No completed scan yet";
-   paintQuotes(d.indices);
-   ticker=d.quotes||{};paintTicker();
+   if(!streamReady)renderStrip(d);
  }catch{
+   if(streamReady)return;
    $("cashSession").textContent="Session unknown | index feed unavailable";
    Object.values(ticker).forEach(q=>q.status="stale");paintTicker();
    const rows=[...lastQuotes.values()];paintQuotes(rows.map(r=>({...r,status:r.level==null?"unavailable":"last known"})));
  }finally{stripBusy=false}
 }
-if(!isHistory){$("marketStrip").hidden=false;paintQuotes(["NIFTY 50","SENSEX","BANK NIFTY"].map(name=>({name,status:"unavailable"})));updateStrip();setInterval(updateStrip,1000);document.addEventListener("visibilitychange",updateStrip)}
+if(!isHistory){
+ $("marketStrip").hidden=false;paintQuotes(["NIFTY 50","SENSEX","BANK NIFTY"].map(name=>({name,status:"unavailable"})));
+ connectQuoteStream();updateStrip();setInterval(updateStrip,1000);
+ document.addEventListener("visibilitychange",()=>{
+   if(document.hidden){quoteStream?.close();quoteStream=null;streamReady=false}
+   else{connectQuoteStream();updateStrip()}
+ });
+}

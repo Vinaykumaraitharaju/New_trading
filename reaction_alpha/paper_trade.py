@@ -936,13 +936,21 @@ class PaperTradeBook:
         with self._lock, self._connect() as conn:
             conn.execute("DELETE FROM paper_candidates WHERE symbol = ?", (key,))
 
-    def update_symbol(self, *, symbol: str, price: float, timestamp: datetime) -> None:
+    def update_symbol(self, *, symbol: str, price: float, timestamp: datetime, bid: float = 0, ask: float = 0,
+                      close_only: bool = False) -> None:
         if not self.config.paper_trading_enabled or price <= 0:
             return
-        for candidate in self._load_candidates(symbol.upper()):
-            self._update_candidate(candidate, price=price, timestamp=timestamp)
+        quoted = 0 < bid <= ask
+        if close_only:
+            self.remove_candidate(symbol)
+        for candidate in ([] if close_only else self._load_candidates(symbol.upper())):
+            if timestamp < candidate.created_at:
+                continue
+            entry = (ask if candidate.direction == "BULLISH" else bid) if quoted else None
+            self._update_candidate(candidate, price=price, timestamp=timestamp, execution_price=entry)
         for trade in self._load_open_trades(symbol.upper()):
-            self._update_trade(trade, price=price, timestamp=timestamp)
+            exit_mark = (bid if trade.direction == "BULLISH" else ask) if quoted else price
+            self._update_trade(trade, price=exit_mark, timestamp=timestamp, close_only=close_only)
 
     def force_market_close_if_needed(self, timestamp: datetime | None = None) -> None:
         if not self.config.paper_trading_enabled:
@@ -1039,7 +1047,7 @@ class PaperTradeBook:
             for row in rows
         ]
 
-    def _update_candidate(self, candidate: PendingTrigger, *, price: float, timestamp: datetime) -> None:
+    def _update_candidate(self, candidate: PendingTrigger, *, price: float, timestamp: datetime, execution_price: float | None = None) -> None:
         now = timestamp.isoformat(timespec="seconds")
         expired = timestamp >= candidate.expires_at
         confirm_buffer = self._entry_confirmation_buffer(candidate)
@@ -1049,8 +1057,8 @@ class PaperTradeBook:
         else:
             entered = (candidate.entry_trigger - confirm_buffer) >= price >= (candidate.entry_trigger - max_chase)
         with self._lock, self._connect() as conn:
-            if entered:
-                trigger_price = self._apply_entry_slippage(direction=candidate.direction, entry_price=price)
+            if entered and (execution_price is None or not expired):
+                trigger_price = self._apply_entry_slippage(direction=candidate.direction, entry_price=execution_price or price)
                 cost_points = self._execution_cost(trigger_price)
                 conn.execute(
                     """
@@ -1155,7 +1163,7 @@ class PaperTradeBook:
             "distance_pct": round(distance_pct, 2) if distance_pct is not None else None,
         }
 
-    def _update_trade(self, trade: ActivePaperTrade, *, price: float, timestamp: datetime) -> None:
+    def _update_trade(self, trade: ActivePaperTrade, *, price: float, timestamp: datetime, close_only: bool = False) -> None:
         now = timestamp.isoformat(timespec="seconds")
         entry = trade.trigger_price if trade.trigger_price is not None else trade.entry_trigger
         favorable = (price - entry) if trade.direction == "BULLISH" else (entry - price)
@@ -1181,7 +1189,12 @@ class PaperTradeBook:
         exit_price: float | None = None
         exited_at: str | None = None
         sl_category: str | None = None
-        if t2_hit:
+        if close_only:
+            state = "CLOSED"
+            result = "MARKET_CLOSE_EXIT"
+            exit_price = self._apply_exit_slippage(direction=trade.direction, exit_price=price)
+            exited_at = now
+        elif t2_hit:
             state = "CLOSED"
             result = "T2_HIT"
             exit_price = self._apply_exit_slippage(direction=trade.direction, exit_price=price)

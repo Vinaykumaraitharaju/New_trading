@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from fastapi.staticfiles import StaticFiles
@@ -8,7 +10,7 @@ from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from .config import ReactionAlphaConfig
 from .display_time import indian_time
@@ -487,6 +489,22 @@ def build_demo_snapshot() -> dict[str, Any]:
     }
 
 
+async def quote_events(service):
+    previous = None
+    idle = 0
+    while True:
+        snapshot = service.market_strip_snapshot()
+        if snapshot != previous:
+            yield "data: " + json.dumps(snapshot, separators=(",", ":")) + "\n\n"
+            previous = snapshot
+            idle = 0
+        elif idle >= 60:
+            yield ": keepalive\n\n"
+            idle = 0
+        idle += 1
+        await asyncio.sleep(0.25)
+
+
 def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     service = ReactionAlphaService(config=config)
     service.paper_trades.experience.configure_cloud()
@@ -545,6 +563,18 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     @app.get("/api/demo/market-strip")
     async def demo_market_strip() -> dict[str, Any]:
         return demo_service.market_strip_snapshot()
+
+    @app.get("/api/demo/market-strip/stream")
+    async def demo_market_stream():
+        return stream_response(demo_service)
+
+    @app.get("/api/market-strip/stream")
+    async def live_market_stream():
+        return stream_response(service)
+
+    def stream_response(source):
+        return StreamingResponse(quote_events(source), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
     @app.get("/api/health")
     async def health() -> dict[str, Any]:
