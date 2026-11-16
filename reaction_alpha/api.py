@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 
 from .config import ReactionAlphaConfig
+from .display_time import indian_time
 from .service import ReactionAlphaService
 
 
@@ -534,7 +535,7 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     app.mount("/workspace-assets", StaticFiles(directory=assets), name="workspace-assets")
 
     @app.get("/api/demo/pretrade/top")
-    async def demo_scan(force: bool = False) -> dict[str, Any]:
+    def demo_scan(force: bool = False) -> dict[str, Any]:
         return demo_service.pretrade_scan(force=force)
 
     @app.get("/api/market-strip")
@@ -561,7 +562,7 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
         return service.snapshot()
 
     @app.get("/api/pretrade/top")
-    async def pretrade_top(force: bool = False) -> dict[str, Any]:
+    def pretrade_top(force: bool = False) -> dict[str, Any]:
         return service.pretrade_scan(force=force)
 
     @app.get("/api/pretrade/archive")
@@ -579,7 +580,7 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
 
     @app.get("/api/demo/signals/{symbol}")
     async def demo_signal_detail(symbol: str) -> dict[str, Any]:
-        return demo_service.get_signal_detail(symbol)
+        return signal_detail_payload(demo_service, symbol)
 
     @app.get("/api/demo/paper-trades")
     async def demo_paper_trade_journal() -> dict[str, Any]:
@@ -673,7 +674,11 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
 
     @app.get("/api/signals/{symbol}")
     async def signal_detail(symbol: str) -> dict[str, Any]:
-        return service.get_signal_detail(symbol)
+        return signal_detail_payload(service, symbol)
+
+    def signal_detail_payload(engine, symbol):
+        detail = engine.get_signal_detail(symbol)
+        return {**detail, "observation_ist": indian_time(detail.get("last_seen_at") or detail.get("timestamp"))}
 
     @app.websocket("/ws/signals")
     async def signal_socket(websocket: WebSocket) -> None:

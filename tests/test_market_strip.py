@@ -64,3 +64,28 @@ def test_strip_reads_do_not_scan_or_authenticate(tmp_path, monkeypatch):
     service.market_strip.completed(123456,55)
     for _ in range(2):
         assert client.get("/api/market-strip").json()["scan"] == {"epoch":123456,"symbols":55}
+
+
+def test_ranked_ticker_keeps_latest_observation_separate_from_scan(tmp_path, monkeypatch):
+    import time
+
+    app = create_app(ReactionAlphaConfig(simulated=True, paper_trade_db_path=str(tmp_path/"paper.db")))
+    service = app.state.reaction_alpha
+    calls = []
+    def scan():
+        calls.append(1)
+        return {"status":"ok","stats":{"scanned":1},"setups":[{"symbol":"ABC","ltp":100}]}
+    monkeypatch.setattr(service,"_pretrade_scan_from_store",scan)
+    client = TestClient(app)
+    client.get("/api/pretrade/top")
+    now = time.time()
+    service._remember_ticker("ABC",101,now)
+    service._remember_ticker("ABC",98,now-1)
+    service._remember_ticker("OTHER",200,now)
+    for _ in range(2):
+        assert client.get("/api/market-strip").json()["quotes"] == {
+            "ABC":{"price":101,"epoch":now,"status":"simulated"}}
+    assert client.get("/api/pretrade/top").json()["setups"][0]["ltp"] == 100
+    assert len(calls)==1
+    client.get("/api/pretrade/top?force=true")
+    assert len(calls)==2

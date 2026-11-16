@@ -109,6 +109,9 @@ class ReactionAlphaService:
         self._scanner = ScannerBrainService()
         self._pretrade_cache: dict[str, Any] | None = None
         self._pretrade_cache_ts = 0.0
+        self._scan_lock = threading.Lock()
+        self._quote_lock = threading.Lock()
+        self._ticker_prices = {}
         self._subscriptions: list[dict[str, str]] = []
         self._signals: dict[str, TradeSignal] = {}
         self._indices = [dict(item) for item in INDEX_DEFS]
@@ -191,6 +194,10 @@ class ReactionAlphaService:
         self._live_init_thread.start()
 
     def pretrade_scan(self, *, force: bool = False) -> dict[str, Any]:
+        with self._scan_lock:
+            return self._ranked_snapshot(force)
+
+    def _ranked_snapshot(self, force: bool) -> dict[str, Any]:
         now = time.time()
         if (
             not force
@@ -204,6 +211,7 @@ class ReactionAlphaService:
         else:
             payload = self._pretrade_scan_from_router()
 
+        payload["scan_started_epoch"] = now
         self._pretrade_cache = payload
         if payload.get("status") == "ok":
             self.market_strip.completed(time.time(), payload["stats"]["scanned"])
@@ -1452,6 +1460,7 @@ class ReactionAlphaService:
             self.paper_trades.update_symbol(symbol=state.symbol, price=state.latest_price(), timestamp=tick.timestamp)
             observed = tick.timestamp if self.config.simulated else self._fresh_trade_time(tick)
             if observed is not None:
+                self._remember_ticker(tick.symbol, tick.price, observed.timestamp())
                 if not self.config.simulated and (self._last_verified_trade is None or observed > self._last_verified_trade):
                     self._last_verified_trade = observed
                 self.paper_trades.update_pretrade_price(symbol=tick.symbol, price=tick.price, timestamp=observed)
@@ -1720,9 +1729,23 @@ class ReactionAlphaService:
             )
         return cards
 
+    def _remember_ticker(self, symbol, price, epoch):
+        with self._quote_lock:
+            if price > 0 and epoch > self._ticker_prices.get(symbol, {}).get("epoch", 0):
+                self._ticker_prices[symbol] = {"price": price, "epoch": epoch}
+
     def market_strip_snapshot(self):
         connected = self._router is not None and self._router.kotak.stream_connected
-        return self.market_strip.snapshot(time.time(), connected)
+        now = time.time()
+        data = self.market_strip.snapshot(now, connected)
+        rows = (self._pretrade_cache or {}).get("setups", [])
+        with self._quote_lock:
+            data["quotes"] = {
+                s["symbol"]: {**q, "status": "stale" if not 0 <= now-q["epoch"] <= 15 else
+                              "simulated" if self.config.simulated else "live" if connected else "stale"}
+                for s in rows if (q := self._ticker_prices.get(s["symbol"]))
+            }
+        return data
 
     def snapshot(self) -> dict[str, Any]:
         if not self.config.simulated_market_always_open:

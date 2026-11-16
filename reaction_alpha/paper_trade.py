@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from .config import ReactionAlphaConfig
 from .models import TradeSignal
 from .experience import Experience, init_memory
+from .display_time import indian_time
 
 
 @dataclass(slots=True)
@@ -322,6 +323,8 @@ class PaperTradeBook:
                                  (existing["id"], parsed["symbol"], source, (now_dt + timedelta(minutes=1)).isoformat(timespec="microseconds"),
                                   now, str(setup.get("market_bias") or "UNKNOWN").upper(), setup["shadow"]["direction"]))
                 ctx = json.loads(existing["context_json"])
+                setup["price_as_of_ist"] = indian_time(existing["updated_at"])
+                setup["expires_at_ist"] = indian_time(existing["expires_at"])
                 setup["shadow"] = ctx.get("shadow")
                 setup.update(setup_id=existing["id"], setup_state=existing["state"],
                              expires_at=existing["expires_at"], published_at=existing["created_at"],
@@ -518,6 +521,8 @@ class PaperTradeBook:
                     "source": json.loads(row["context_json"]).get("source", "unknown"),
                     "expires_at": row["expires_at"],
                     "t1_at": row["t1_at"],
+                    "timeline_ist": {key: indian_time(row[key]) for key in
+                                     ("created_at", "entered_at", "t1_at", "exited_at", "expires_at")},
                     "first_barrier": ("T1" if row["t1_hit"] else "STOP" if row["result"] == "SL_HIT" else None),
                     "direction_30m": row["direction_30m"],
                     "market_baseline": row["market_baseline"],
