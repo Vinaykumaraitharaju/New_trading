@@ -44,6 +44,8 @@ from .trade_levels import build_trade_levels, resolve_trade_state
 from .engines.scoring_engine import UnifiedScore
 from .market_strip import MarketStrip, NAMES
 from .demo_tape import trade_arrivals
+from .timed_editions import TimedEditions
+from .edition_context import EditionContext
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +135,8 @@ class ReactionAlphaService:
         self._live_init_thread: threading.Thread | None = None
         self._selection_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
+        self.editions = None
+        self.edition_context = EditionContext()
         self._live_status = "idle"
         self._last_verified_trade = None
         self._live_status_detail = "Waiting to initialize live feed"
@@ -145,7 +149,20 @@ class ReactionAlphaService:
             self._live_status_detail = "Simulation engine active"
             self._start_simulation()
         else:
+            self.editions = TimedEditions(self.config.paper_trade_db_path)
+            threading.Thread(target=self.edition_context.run, args=(self._stop_event,),
+                             daemon=True, name="edition-context").start()
+            threading.Thread(target=self._edition_clock, daemon=True, name="edition-clock").start()
             self._start_live_feed_async()
+
+    def _edition_clock(self):
+        while not self._stop_event.is_set():
+            try:
+                self.editions.tick(time.time(), bool(self._router and self._router.kotak.stream_connected),
+                                   self.edition_context.latest)
+            except Exception:
+                log.exception("Timed edition clock failed")
+            self._stop_event.wait(1)
 
     async def shutdown(self) -> None:
         self._stop_event.set()
@@ -1466,6 +1483,9 @@ class ReactionAlphaService:
                               and tick.bid_size > 0 and tick.ask_size > 0)
             if not self._remember_ticker(tick.symbol, tick.price, observed.timestamp(), tick.volume, executable):
                 return None
+            if self.editions is not None:
+                self.editions.observe(tick.symbol, observed.timestamp(), tick.price,
+                                      tick.bid if executable else 0, tick.ask if executable else 0)
             state = self.store.update_tick(tick)
             if simulated and not self.config.simulated_market_always_open:
                 self.paper_trades.force_market_close_if_needed(tick.timestamp)

@@ -14,6 +14,41 @@ const fmtTime=d=>new Date(d).toLocaleTimeString("en-IN",{timeZone:"Asia/Kolkata"
 async function get(url,options={}){const r=await fetch(url,{cache:"no-store",signal:AbortSignal.timeout(30000),...options});if(!r.ok)throw Error("Request failed");return r.json()}
 function table(head,rows,empty){return rows.length?'<table class="grid"><thead><tr>'+head.map(x=>'<th>'+esc(x)+'</th>').join("")+'</tr></thead><tbody>'+rows.map(r=>'<tr>'+r.map((x,i)=>'<td data-label="'+esc(head[i])+'">'+x+'</td>').join("")+'</tr>').join("")+'</tbody></table>':'<p class="empty">'+esc(empty)+'</p>'}
 function note(title,msg){$("notice").innerHTML='<div class="note"><b>'+esc(title)+'</b><small>'+esc(msg)+'</small></div>'}
+let editions=[],editionBusy=false,currentContext={};
+function sourceLine(ctx){
+ const fx=ctx.fx;
+ return '<small>'+(fx?'ECB daily reference, USD/INR '+esc(fx.usd_inr)+' as of '+esc(fx.date):'ECB daily reference unavailable')+
+ ' | '+esc(ctx.sec_status==="Not configured"?"SEC filings not configured":ctx.sec_status||"Filing data unavailable")+'</small>'+
+ (ctx.fed?'<small>US Federal Reserve: '+esc(ctx.fed.title)+' | Published '+esc(indexStamp.format(ctx.fed.published*1000))+' IST | Retrieved '+esc(indexStamp.format(ctx.fed.received*1000))+' IST</small>':'<small>US policy feed unavailable</small>');
+}
+function paintEdition(){
+ const e=editions.find(r=>String(r.slot)===$("editionSlot").value);
+ if(!e){$("editionReport").innerHTML='<p>No live edition recorded yet. Scheduled every 20 minutes from 09:20 IST during supported sessions.</p>'+sourceLine(currentContext);return}
+ const stamp=t=>fmtTime(t*1000), ctx=e.context||{};
+ $("editionReport").innerHTML='<small>T1 by '+stamp(e.slot+600)+' | T2 by '+stamp(e.slot+1200)+' | NIFTY 5 min: '+(e.nifty_move==null?'unavailable':signedFmt.format(e.nifty_move*100)+'%')+' | Price observations, not fills</small>'+
+ table(["Stock","Entry / stop","T1 / T2","Outcome","Prior on-time T1"],e.picks.map(p=>{
+ const f=ctx.filings?.[p.symbol];
+ return ['<b>'+esc(p.symbol)+'</b><small>'+esc(p.direction)+'</small>',px(p.entry)+' / '+px(p.stop),px(p.t1)+' / '+px(p.t2),
+ esc(p.state)+(p.entered?'<small>Entry '+stamp(p.entered)+'</small>':'')+(p.hit1?'<small>T1 '+stamp(p.hit1)+'</small>':'')+(p.ended?'<small>End '+stamp(p.ended)+'</small>':''),
+ (p.prior_calls?p.prior_t1+' / '+p.prior_calls+' in '+p.prior_days+' sessions':'No measured examples')+
+ '<small>Shadow rank '+esc(p.shadow_rank)+'</small>'+(f?'<small>SEC '+esc(f.form)+' | '+esc(indexStamp.format(f.published*1000))+' IST</small>':'')];
+ }),e.connected?"No qualifying setup with fresh five-minute coverage.":"Feed disconnected at publication.")+
+ sourceLine(ctx);
+ if(isHistory){
+   const measured=p=>p&&(p.hit1||["Invalidated","Missed move","No entry","Stop first","No timely T1"].includes(p.state));
+   let paired=0,base=0,shadow=0;
+   editions.forEach(b=>{const a=b.picks[0],s=b.picks.find(x=>x.shadow_rank===1);if(measured(a)&&measured(s)){paired++;base+=Number(!!a.hit1);shadow+=Number(!!s.hit1)}});
+   $("editionReport").insertAdjacentHTML("beforeend",'<small>Latest '+editions.length+' editions | Measured top-pick comparisons: '+paired+' | On-time T1: original '+base+', shadow '+shadow+'</small>');
+ }
+}
+async function loadEditions(){
+ if(prefix||editionBusy||document.hidden)return;editionBusy=true;
+ try{const d=await get("/api/timed-editions");if(d.mode!=="live")return;
+ const old=$("editionSlot").value,latest=String(editions[0]?.slot);editions=d.editions;currentContext=d.context||{};
+ $("editions").hidden=false;$("editionSlot").innerHTML=editions.map(e=>'<option value="'+e.slot+'">'+esc(indexStamp.format(e.slot*1000))+'</option>').join("");
+ if(old!==latest&&editions.some(e=>String(e.slot)===old))$("editionSlot").value=old;
+ paintEdition()}catch{$("editions").hidden=false;$("editionReport").textContent="Timed picks unavailable."}finally{editionBusy=false}
+}
 function nav(id,url,active){$(id).href=url;if(active)$(id).setAttribute("aria-current","page")}
 nav("brand",home,false);nav("scannerNav",home,!isHistory);nav("historyNav",hist,isHistory);$("mode").value=prefix;
 $("mode").onchange=()=>{location.href=($("mode").value||"")+(location.pathname.slice(prefix.length)||"/")+location.search+location.hash};
@@ -125,3 +160,5 @@ if(!isHistory){
    else{connectQuoteStream();updateStrip()}
  });
 }
+$("editionSlot").onchange=paintEdition;
+if(!prefix){loadEditions();setInterval(loadEditions,10000)}
