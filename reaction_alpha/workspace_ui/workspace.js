@@ -50,6 +50,7 @@ async function historyView(){
 }
 async function detail(symbol){selected=symbol;const s=setups.find(x=>x.symbol===symbol),dlg=$("detail");if(!dlg.open)dlg.showModal();
  $("detailBody").innerHTML='<div class="eyebrow">STOCK DETAIL</div><h2 id="detailTitle">'+esc(symbol)+'</h2>';
+ $("detailBody").insertAdjacentHTML("beforeend",'<section id="stockQuote" aria-label="Stock quote"></section>');paintStockQuote();
  if(!s){const d=await get(api+"/signals/"+encodeURIComponent(symbol));if(selected===symbol)$("detailBody").insertAdjacentHTML("beforeend",'<p>No ranked setup for this symbol.</p><dl><dt>Signal state</dt><dd>'+esc(d.state||"Not active")+'</dd><dt>Last observation</dt><dd>'+esc(d.observation_ist||"Not recorded")+'</dd><dt>Last price</dt><dd>'+px(d.last_price)+'</dd></dl>');return}
  const fields=[["Outlook",direction(s)+" / 30 min"],["Setup",s.setup_type],["Entry condition",condition(s)],["Invalidation",px(s.stop_loss)],["T1 / T2",px(s.target1)+" / "+px(s.target2)],["Last observation",s.price_as_of_ist],["Deadline",s.expires_at_ist],["Selector score",s.final_selector_score??s.score],["Counter-evidence",[s.why_not_higher,s.missing_confirmation].flat().filter(Boolean)[0]||"Not recorded"]];
  if(s.shadow)fields.push(["Learning forecast (shadow)",(s.shadow.direction||"Insufficient evidence")+" | "+s.shadow.examples+" examples across "+s.shadow.sessions+" earlier sessions"]);
@@ -95,10 +96,21 @@ const levelFmt=new Intl.NumberFormat("en-IN",{minimumFractionDigits:2,maximumFra
 const signedFmt=new Intl.NumberFormat("en-IN",{minimumFractionDigits:2,maximumFractionDigits:2,signDisplay:"exceptZero"});
 const indexStamp=new Intl.DateTimeFormat("en-GB",{timeZone:"Asia/Kolkata",day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit",second:"2-digit",hour12:false});
 let stripBusy=false,lastQuotes=new Map();
+function stockMove(q){
+ if(!Number.isFinite(q?.percent))return "Change unavailable";
+ return (q.change>0?"Up ":q.change<0?"Down ":"Flat ")+px(Math.abs(q.change))+" ("+signedFmt.format(q.percent)+"%)";
+}
+function paintStockQuote(){
+ const box=$("stockQuote");if(!box)return;
+ const q=ticker[selected];
+ const message=q?px(q.price)+" | "+stockMove(q)+" vs previous close"+(q.previous_close?" "+px(q.previous_close):"")+" | "+q.status+" | "+indexStamp.format(q.epoch*1000)+" IST":"No timestamped stock quote available.";
+ if(box.textContent!==message)box.textContent=message;
+}
 function paintTicker(){
+ paintStockQuote();
  document.querySelectorAll("[data-price]").forEach(el=>{
    const q=ticker[el.dataset.price];if(!q||q.epoch<scanStarted)return;
-   const value=px(q.price),label=q.status+" | "+fmtTime(q.epoch*1000)+(q.status==="live"&&q.has_book===false?" | No verified bid/ask":"");
+   const value=px(q.price),label=stockMove(q)+" vs previous close | "+q.status+" | "+indexStamp.format(q.epoch*1000)+" IST"+(q.status==="live"&&q.has_book===false?" | No verified bid/ask":"");
    if(el.textContent!==value)el.textContent=value;
    if(el.nextElementSibling.textContent!==label)el.nextElementSibling.textContent=label;
  });

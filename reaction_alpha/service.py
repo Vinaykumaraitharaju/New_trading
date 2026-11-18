@@ -42,7 +42,7 @@ from .probability import OutcomeTracker
 from .state import InMemoryMarketStore, SymbolState
 from .trade_levels import build_trade_levels, resolve_trade_state
 from .engines.scoring_engine import UnifiedScore
-from .market_strip import MarketStrip, NAMES
+from .market_strip import IST, MarketStrip, NAMES
 from .demo_tape import trade_arrivals
 from .timed_editions import TimedEditions
 from .edition_context import EditionContext
@@ -1481,7 +1481,9 @@ class ReactionAlphaService:
                 executable = (tick.symbol not in NAMES and book_time is not None
                               and isfinite(tick.ask) and 0 < tick.bid <= tick.ask
                               and tick.bid_size > 0 and tick.ask_size > 0)
-            if not self._remember_ticker(tick.symbol, tick.price, observed.timestamp(), tick.volume, executable):
+            reference = (self.store.get(tick.symbol).previous_close if simulated else
+                         tick.raw.get("prev_close") or tick.raw.get("close_price") or tick.raw.get("c"))
+            if not self._remember_ticker(tick.symbol, tick.price, observed.timestamp(), tick.volume, executable, reference):
                 return None
             if self.editions is not None:
                 self.editions.observe(tick.symbol, observed.timestamp(), tick.price,
@@ -1765,13 +1767,18 @@ class ReactionAlphaService:
             )
         return cards
 
-    def _remember_ticker(self, symbol, price, epoch, volume=0, executable=False):
+    def _remember_ticker(self, symbol, price, epoch, volume=0, executable=False, reference=None):
         with self._quote_lock:
             prev = self._ticker_prices.get(symbol)
             if not isfinite(price) or price <= 0 or (prev and (epoch < prev["epoch"] or
                     (epoch == prev["epoch"] and not (0 < prev["volume"] < volume)))):
                 return False
-            self._ticker_prices[symbol] = dict(price=price, epoch=epoch, volume=volume, executable=executable)
+            close = safe_float(reference)
+            if not (isfinite(close) and close > 0):
+                close = (prev.get("previous_close") if prev and datetime.fromtimestamp(prev["epoch"], IST).date()
+                         == datetime.fromtimestamp(epoch, IST).date() else None)
+            self._ticker_prices[symbol] = dict(price=price, epoch=epoch, volume=volume, executable=executable,
+                                               previous_close=close)
             return True
 
     def market_strip_snapshot(self):
@@ -1782,6 +1789,9 @@ class ReactionAlphaService:
         with self._quote_lock:
             data["quotes"] = {
                 s["symbol"]: {"price": q["price"], "epoch": q["epoch"],
+                              **({"previous_close": q["previous_close"], "change": q["price"]-q["previous_close"],
+                                  "percent": 100*(q["price"]-q["previous_close"])/q["previous_close"]}
+                                 if q.get("previous_close") else {}),
                               **({} if self.config.simulated else {"has_book": q["executable"]}),
                               "status": "stale" if not 0 <= now-q["epoch"] <= 15 else
                               "simulated" if self.config.simulated else "live" if connected else "stale"}

@@ -89,3 +89,9 @@ def test_ranked_ticker_keeps_latest_observation_separate_from_scan(tmp_path, mon
     assert len(calls)==1
     client.get("/api/pretrade/top?force=true")
     assert len(calls)==2
+    service._remember_ticker("ABC",98,now+1,reference=100)
+    service._remember_ticker("ABC",97,now+2)
+    quote=client.get("/api/market-strip").json()["quotes"]["ABC"]
+    assert (quote["previous_close"],quote["change"],quote["percent"]) == (100,-3,-3)
+    service._remember_ticker("ABC",102,now+86400)
+    assert "percent" not in client.get("/api/market-strip").json()["quotes"]["ABC"]
