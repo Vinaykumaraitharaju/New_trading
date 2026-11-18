@@ -1,39 +1,106 @@
-"""Offline browser check of the timed-edition report using the actual workspace assets."""
+"""Deterministic desktop/mobile checks using the real workspace assets."""
+from copy import deepcopy
+from datetime import datetime
 from pathlib import Path
+from tempfile import TemporaryDirectory
+import sys
+
 from playwright.sync_api import sync_playwright, expect
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from reaction_alpha.timed_editions import TimedEditions
+
 ASSETS = Path(__file__).resolve().parents[1]/"reaction_alpha/workspace_ui"
-SLOT = 1794887400
-PICK = dict(symbol="ABC", direction="Bullish", entry=100, stop=99, t1=101, t2=102,
-            state="T1 reached", entered=SLOT+60, hit1=SLOT+250, ended=None,
-            prior_calls=1, prior_days=1, prior_t1=0, shadow_rank=1)
+OUT = Path(__file__).resolve().parents[1]/"docs/workspace/screenshots"
+SLOT = int(datetime.fromisoformat("2026-11-18T09:20:00+05:30").timestamp())
+
+
+def fixture(path):
+    book = TimedEditions(path)
+    for symbol, base, sign in [("RELIANCE", 1400, 1), ("INFY", 1500, -1), ("HDFCBANK", 1000, 1)]:
+        for t in range(0, 300, 5):
+            price = base+sign*t/50
+            book.observe(symbol, SLOT-300+t, price, price-.05, price+.05)
+    book.tick(SLOT, True)
+    data = book.snapshot(SLOT+2)
+    data.update(mode="live", context={})
+    yesterday = deepcopy(data["editions"][0])
+    yesterday["slot"] -= 86400
+    data["editions"].append(yesterday)
+    return data
 
 
 def run():
-    with sync_playwright() as pw:
+    OUT.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory() as tmp, sync_playwright() as pw:
+        initial = fixture(str(Path(tmp)/"paper.db"))
         browser = pw.chromium.launch(channel="msedge")
         for width in (390, 1280):
-            page = browser.new_page(viewport=dict(width=width, height=844))
+            page = browser.new_page(viewport=dict(width=width, height=900))
+            errors = []
+            page.on("pageerror", lambda e: errors.append(str(e)))
+            data = deepcopy(initial)
+
             def route(r):
                 path = r.request.url.split(".test", 1)[1]
-                if path == "/":
+                if path == "/" or path.startswith("/history") or path == "/demo":
                     return r.fulfill(path=str(ASSETS/"index.html"))
                 if path.startswith("/workspace-assets/"):
                     return r.fulfill(path=str(ASSETS/Path(path).name))
                 if path.endswith("/stream"):
                     return r.abort()
-                if path == "/api/timed-editions":
-                    return r.fulfill(json={"mode":"live", "editions":[
-                        dict(slot=SLOT+1200, picks=[], connected=True), dict(slot=SLOT,picks=[PICK],connected=True)]})
-                return r.fulfill(json={"indices":[], "setups":[]})
+                if path.startswith("/api/timed-editions"):
+                    return r.fulfill(json=data)
+                if path == "/api/health":
+                    return r.fulfill(json={"mode":"live", "feed_connection":{"status":"live", "last_verified_trade_epoch":SLOT-86400}})
+                if path == "/api/market-strip":
+                    return r.fulfill(json={"session":"open", "indices":[dict(name=n, level=v, change=c, percent=.3, epoch=SLOT, status=s)
+                        for n,v,c,s in [("NIFTY 50",25387.4,96.3,"live"),("SENSEX",82532.19,427.4,"stale"),("BANK NIFTY",62273.25,697.3,"live")]]})
+                return r.fulfill(json={"indices":[], "setups":[], "recent":[]})
+
             page.route("**/*", route)
             page.goto("http://scanner.test/")
-            expect(page.locator("#editionReport")).to_contain_text("No qualifying setup")
-            page.locator("#editionSlot").select_option(str(SLOT))
-            expect(page.locator("#editionReport")).to_contain_text("T1 reached")
+            expect(page.locator("#editionSlot")).to_have_value(str(SLOT))
+            expect(page.locator("#editionSlot option")).to_have_count(19)
+            expect(page.locator("#editionSlot")).not_to_contain_text("17 Nov")
+            expect(page.locator("#tradeTime")).to_contain_text("17 Nov 2026")
+            expect(page.locator("#editionReport")).to_contain_text("Frozen at publication")
+            page.screenshot(path=OUT/f"timed-scanner-{width}.png", full_page=True)
+            page.locator(".pick-reason summary").first.click()
+            expect(page.locator(".pick-reason").first).to_contain_text("not predicted fair values")
+            expect(page.locator(".pick-reason").first).to_contain_text("Unverified company evidence")
+            page.screenshot(path=OUT/f"timed-evidence-{width}.png", full_page=True)
+            page.evaluate("loadEditions()")
+            expect(page.locator(".pick-reason").first).to_have_attribute("open", "")
+            page.locator("#editionSlot").select_option(str(SLOT+6*3600))
+            expect(page.locator("#editionReport")).to_contain_text("15:30")
+            expect(page.locator("#editionReport")).to_contain_text("Candidate assessment starts")
             assert page.evaluate("document.documentElement.scrollWidth<=innerWidth")
+            page.goto(f"http://scanner.test/history?edition={SLOT}&pick=RELIANCE")
+            expect(page.locator("#editionTitle")).to_have_text("Timed forecast archive")
+            expect(page.locator(f'[data-reason="{SLOT}:RELIANCE"]')).to_have_attribute("open", "")
+            page.locator("#editionSlot").select_option(str(SLOT-86400))
+            expect(page.locator("#editionReport")).to_contain_text("Archived")
+            data["preview"]["for_slot"] = SLOT+1200
+            data["preview"]["picks"] = deepcopy(data["editions"][0]["picks"])
+            data["schedule"]["selected_slot"] = SLOT+1200
+            page.goto("http://scanner.test/")
+            expect(page.locator("#editionReport")).to_contain_text("Developing candidates")
+            expect(page.locator("#editionReport")).not_to_contain_text("Frozen at publication")
+            data["editions"] = []
+            data["preview"]["picks"] = []
+            data["preview"]["connected"] = False
+            page.goto("http://scanner.test/")
+            expect(page.locator("#editionReport")).to_contain_text("Broker disconnected")
+            data["schedule"].update(slots=[], selected_slot=None, session="unknown")
+            page.goto("http://scanner.test/")
+            expect(page.locator("#editionReport")).to_contain_text("Calendar unavailable")
+            page.goto("http://scanner.test/demo")
+            expect(page.locator("#editions")).to_be_hidden()
+            assert not errors, errors
             page.close()
         browser.close()
+    print("Timed research desktop/mobile: schedule, evidence, archive, disconnect, calendar, demo PASS")
 
 
 if __name__ == "__main__":
