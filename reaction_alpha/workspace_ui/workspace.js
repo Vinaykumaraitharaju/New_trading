@@ -110,6 +110,10 @@ function paintQuotes(rows){
  }).join("");lastQuotes=new Map(rows.map(r=>[r.name,r]));
 }
 function renderStrip(d){
+ const bias=d.market_read||{};
+ $("marketBias").textContent=bias.label||"Direction unconfirmed";
+ $("marketBias").className=bias.label?.endsWith("Bearish")?"down":bias.label?.endsWith("Bullish")?"up":"";
+ $("marketWhy").textContent=bias.reason||"Waiting for verified index changes.";
  $("cashSession").textContent="NSE cash session: "+d.session;
  $("scanActivity").textContent=d.scan?"Last scan: "+indexStamp.format(d.scan.epoch*1000)+" IST | "+d.scan.symbols+" symbols":"No completed scan yet";
  paintQuotes(d.indices);ticker=d.quotes||{};paintTicker();
@@ -129,6 +133,7 @@ async function updateStrip(){
  }catch{
    if(streamReady)return;
    $("cashSession").textContent="Session unknown | index feed unavailable";
+   $("marketBias").textContent="Direction unconfirmed";$("marketBias").className="";$("marketWhy").textContent="Index feed unavailable.";
    Object.values(ticker).forEach(q=>q.status="stale");paintTicker();
    const rows=[...lastQuotes.values()];paintQuotes(rows.map(r=>({...r,status:r.level==null?"unavailable":"last known"})));
  }finally{stripBusy=false}

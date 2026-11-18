@@ -21,6 +21,11 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 
 ## Implemented Evidence
 
+Scanner labels market direction from the three index changes versus previous
+close. At least two fresh indices must agree for Bullish/Bearish. Conflicting
+readings remain visible. This describes the indices, not the cause of the move
+or the performance of every stock; it does not change stock entry rules.
+
 | Input | How it is used | Limitation |
 | --- | --- | --- |
 | Timestamped Kotak prices | Range, pressure, breakout entry and barrier observations | Feed gaps make outcomes unresolved |

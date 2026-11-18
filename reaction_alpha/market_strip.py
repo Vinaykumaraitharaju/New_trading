@@ -24,6 +24,23 @@ def session(epoch):
     return "open" if start <= local.time() < time(15, 30) else "closed"
 
 
+def market_read(rows, market, simulated):
+    labels = {"simulated"} if simulated else {"live"}
+    usable = [r for r in rows if r["status"] in labels and r["percent"] is not None]
+    if market != "open" and not simulated:
+        return {"label": "Market closed" if market == "closed" else "Session unknown",
+                "reason": "No live direction call outside a confirmed open session."}
+    if len(usable) < 2:
+        return {"label": "Direction unconfirmed", "reason": "Need two fresh index quotes with verified previous closes."}
+    down = sum(r["percent"] < 0 for r in usable)
+    up = sum(r["percent"] > 0 for r in usable)
+    label = "Bearish" if down >= 2 else "Bullish" if up >= 2 else "Flat" if not up and not down else "Mixed"
+    detail = ", ".join(f"{r['name']} {r['percent']:+.2f}%" for r in usable)
+    return {"label": ("Demo: " if simulated else "") + label,
+            "reason": f"{down} below and {up} above previous close among {len(usable)} usable indices: {detail}. "
+                      "Index direction only; a news cause is not verified."}
+
+
 class MarketStrip:
     def __init__(self, simulated):
         self.simulated = simulated
@@ -70,4 +87,5 @@ class MarketStrip:
                         status = "live" if age <= 15 else "delayed"
                 rows.append(dict(name=label, level=price, change=change, percent=100*change/close if close else None,
                                  epoch=epoch, status=status))
-            return {"session": market, "indices": rows, "scan": self.scan}
+            return {"session": market, "indices": rows, "scan": self.scan,
+                    "market_read": market_read(rows, market, self.simulated)}
