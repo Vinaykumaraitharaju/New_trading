@@ -58,12 +58,28 @@ function closeDetail(){if(history.state?.drawer)history.back();else{history.repl
 function syncDetail(){const sym=location.pathname.match(/\/stock\/([^/]+)/)?.[1];if(sym)detail(decodeURIComponent(sym)).catch(()=>note("Stock data unavailable","Refresh to retry."));else{if($("detail").open)$("detail").close();if(!isHistory){scanner();document.querySelector('a[data-stock="'+CSS.escape(selected)+'"]')?.focus({preventScroll:true})}}}
 $("close").onclick=closeDetail;$("detail").oncancel=e=>{e.preventDefault();closeDetail()};window.onpopstate=syncDetail;
 $("content").onclick=e=>{const a=e.target.closest("a[data-stock]");if(!a||e.ctrlKey||e.metaKey)return;e.preventDefault();history.pushState({drawer:true},"",a.href);syncDetail()};
+$("brokerForm").onsubmit=async event=>{
+ event.preventDefault();
+ const form=event.currentTarget,button=form.querySelector("button"),fields=new FormData(form);
+ if(button.disabled)return;
+ button.disabled=true;form.reset();$("brokerResult").textContent="Reconnecting to Kotak...";
+ try{
+ const headers={"Content-Type":"application/json"};
+ if(fields.get("secret"))headers["X-Reaction-Alpha-Secret"]=fields.get("secret");
+ const response=await fetch("/api/kotak/totp",{method:"POST",headers,body:JSON.stringify({totp_code:fields.get("code")})});
+ const ok=response.ok&&(await response.json()).ok;
+ $("brokerResult").textContent=ok?"Login accepted. Waiting for a fresh verified trade.":"Login failed. Check the current TOTP and admin secret.";
+ if(ok)void load(false,true);
+ }catch{$("brokerResult").textContent="Could not confirm login. Check feed status before retrying."}
+ finally{button.disabled=false}
+};
 async function load(force=false,healthOnly=false){if(loading){if(force){queuedRefresh=true;$("refreshStatus").textContent="Refresh queued";$("refresh").disabled=true}return}loading=true;
  if(force){$("refresh").disabled=true;$("refreshStatus").textContent=isHistory?"Refreshing history...":"Running scan..."}
  try{
  try{
  const h=await get(prefix?api+"/snapshot":"/api/health"),f=h.feed_connection||{},sim=prefix||h.mode==="simulated",t=f.last_verified_trade_epoch,age=Date.now()/1000-t;
  const verified=!sim&&f.status==="live"&&t&&age>=0&&age<=15;
+ $("brokerReconnect").hidden=!!sim||!!verified;
  $("connection").textContent=sim?"Demo / simulated prices":verified?"Live / verified trades":f.status==="live"?"Live / stale or unverified":"Live / disconnected";
  $("connection").className=verified?"good":"";$("tradeTime").textContent=t?indexStamp.format(t*1000)+" IST":"None verified";
  if(!prefix&&h.mode!=="simulated"&&(await get("/api/kotak/login-state")).state==="totp_required"){location.reload();return}
