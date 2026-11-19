@@ -21,6 +21,23 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 
 ## Implemented Evidence
 
+**Daily +/-4% study:** Scanner lists the first verified touch of each boundary
+against the stock's same-session reference close, even if the move reverses.
+Coverage is the monitored live feed, not the entire exchange. First observed
+already beyond the boundary is reported, not credited as a forecast. Fresh NIFTY
+comparison and available timestamped SEC filing metadata are context, not a
+causal news model. Indian company news coverage is not comprehensive.
+
+On first observation inside the band, freeze a shadow forecast for the first
+observed boundary through session close. Group by starting half-hour and starting
+move (below -1%, within 1%, above +1%, inclusive at the outer boundaries).
+Use the most frequent label from the preceding 180 days only after 30 measured
+examples across five sessions; abstain on ties. Include neither-touch controls
+only with no observed gap over 45 seconds and coverage into the final 15 seconds.
+Unobserved gaps are not negative examples. Selective coverage and survivorship
+can bias results; compare prospective predictions to always-neither before
+considering promotion. Stored locally in the persistent paper database.
+
 History > Performance now includes a Direction scorecard across archived sessions,
 separated by source. New live forecasts freeze NIFTY and stock five-minute
 continuation baselines when timestamped coverage is available. Each uses a

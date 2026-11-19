@@ -97,6 +97,7 @@ async function loadEditions(){
  const requested=isHistory&&/^\d+$/.test(params.get('edition')||'')?'?slot='+params.get('edition'):'';
  const d=await get('/api/timed-editions'+requested);if(d.mode!=='live')return;
  const old=$("editionSlot").value;deskData=d;
+ paintMovers(d.daily_movers);
  const options=isHistory?(d.editions||[]).map(e=>({slot:e.slot,phase:'Archived'})):(d.schedule?.slots||[]);
  $("editions").hidden=false;$("editionTitle").textContent=isHistory?'Timed forecast archive':"Today's trade windows";
  $("editionSlot").innerHTML=options.map(r=>'<option value="'+r.slot+'">'+esc(isHistory?indexStamp.format(r.slot*1000):slotTime(r.slot))+' · '+esc(r.phase)+'</option>').join('');
@@ -109,4 +110,21 @@ async function loadEditions(){
  const report=$("editionReport");
  if(!report.querySelector('.desk-error'))report.insertAdjacentHTML('afterbegin','<p class="desk-error" role="status">Timed research update failed. Any displayed data is from the previous successful request.</p>');
  }finally{editionBusy=false}
+}
+
+function paintMovers(d){
+ const box=$("dailyMovers");if(!d){box.hidden=true;return}
+ const expanded=box.querySelector('details')?.open;
+ box.hidden=false;
+ box.innerHTML='<h2>Today’s ±4% movers</h2><p class="desk-caption">'+esc(d.day)+' IST · '+esc(d.covered)+' monitored stocks with a verified reference close · First observed touches, not closing returns</p>'+
+ table(['Stock','First move','At touch / previous close','Market context','Company evidence'],d.movers.map(r=>{
+ const f=r.filing;
+ return [esc(r.symbol),'<b class="'+(r.side==='Up'?'up':'down')+'">'+esc(signedFmt.format(r.percent))+'%</b><small>'+esc(deskStamp(r.at))+'</small>',
+ px(r.price)+' / '+px(r.close)+(r.first_observation===r.at?'<small>Already beyond threshold at first observation</small>':r.first_observation?'<small>First seen '+esc(signedFmt.format(r.initial_pct))+'% at '+esc(slotTime(r.first_observation))+' IST</small>':''),
+ r.nifty_pct==null?'No fresh NIFTY comparison':'NIFTY '+esc(signedFmt.format(r.nifty_pct))+'%; stock minus index '+esc(signedFmt.format(r.percent-r.nifty_pct))+' points',
+ f?(/^https:\/\/www\.sec\.gov\/Archives\/edgar\//.test(f.url)?'<a href="'+esc(f.url)+'" target="_blank" rel="noopener">SEC '+esc(f.form)+'</a>':'SEC '+esc(f.form))+' filed '+esc(deskStamp(f.published))+'. Cause unconfirmed.':'No verified company-specific cause.'];
+ }),d.covered?'No ±4% move observed in this coverage.':'No verified stock observations with previous closes today.')+
+ '<details '+(expanded?'open':'')+'><summary>Before the move: research forecasts</summary><p>First observed stock move and half-hour compared with earlier sessions. '+esc(d.training_examples)+' eligible historical examples. No live ranking changes.</p><p>Measured prior forecasts: '+esc(d.paired)+'. Model correct: '+esc(d.correct)+'. Always predict neither: '+esc(d.neither_correct)+'. Incomplete coverage can bias these counts.</p>'+
+ table(['Stock','Observed at start','Shadow forecast','Earlier examples','Measured outcome'],d.forecasts.map(r=>[esc(r.symbol),esc(signedFmt.format(r.start_pct))+'%<small>'+esc(deskStamp(r.start))+'</small>',
+ esc(r.prediction||'Insufficient evidence'),Object.entries(r.prior_counts).map(([k,v])=>esc(k)+': '+esc(v)).join(', ')||'None',esc(r.outcome||'Not measured')]),'No pre-threshold observations yet.')+'</details>';
 }

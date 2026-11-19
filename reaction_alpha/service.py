@@ -43,6 +43,7 @@ from .state import InMemoryMarketStore, SymbolState
 from .trade_levels import build_trade_levels, resolve_trade_state
 from .engines.scoring_engine import UnifiedScore
 from .market_strip import IST, MarketStrip, NAMES
+from .daily_movers import DailyMovers
 from .demo_tape import trade_arrivals
 from .timed_editions import TimedEditions
 from .edition_context import EditionContext
@@ -136,6 +137,7 @@ class ReactionAlphaService:
         self._selection_thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self.editions = None
+        self.movers = None
         self.edition_context = EditionContext()
         self._live_status = "idle"
         self._last_verified_trade = None
@@ -150,6 +152,7 @@ class ReactionAlphaService:
             self._start_simulation()
         else:
             self.editions = TimedEditions(self.config.paper_trade_db_path)
+            self.movers = DailyMovers(self.config.paper_trade_db_path)
             threading.Thread(target=self.edition_context.run, args=(self._stop_event,),
                              daemon=True, name="edition-context").start()
             threading.Thread(target=self._edition_clock, daemon=True, name="edition-clock").start()
@@ -1494,6 +1497,11 @@ class ReactionAlphaService:
             if self.editions is not None:
                 self.editions.observe(tick.symbol, observed.timestamp(), tick.price,
                                       tick.bid if executable else 0, tick.ask if executable else 0)
+            if self.movers is not None:
+                self.movers.observe(tick.symbol, observed.timestamp(), tick.price,
+                                    self._ticker_prices[tick.symbol]["previous_close"],
+                                    self.edition_context.latest.get("filings", {}).get(tick.symbol),
+                                    self._ticker_prices.get("NIFTY"))
             state = self.store.update_tick(tick)
             if simulated and not self.config.simulated_market_always_open:
                 self.paper_trades.force_market_close_if_needed(tick.timestamp)

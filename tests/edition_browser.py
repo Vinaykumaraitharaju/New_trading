@@ -24,6 +24,10 @@ def fixture(path):
     book.tick(SLOT, True)
     data = book.snapshot(SLOT+2)
     data.update(mode="live", context={})
+    data["daily_movers"] = dict(day="2026-11-18", covered=3, training_examples=0,
+        paired=0, correct=0, neither_correct=0, forecasts=[], movers=[
+        dict(symbol="INFY",close=1500,side="Down",at=SLOT,price=1440,percent=-4,
+             first_observation=SLOT,initial_pct=-4,nifty_pct=-.5,filing=None)])
     yesterday = deepcopy(data["editions"][0])
     yesterday["slot"] -= 86400
     data["editions"].append(yesterday)
@@ -65,6 +69,8 @@ def run():
             expect(page.locator("#editionSlot")).not_to_contain_text("17 Nov")
             expect(page.locator("#tradeTime")).to_contain_text("17 Nov 2026")
             expect(page.locator("#editionReport")).to_contain_text("Frozen at publication")
+            expect(page.locator("#dailyMovers")).to_contain_text("Already beyond threshold")
+            expect(page.locator("#dailyMovers")).to_contain_text("No verified company-specific cause")
             page.screenshot(path=OUT/f"timed-scanner-{width}.png", full_page=True)
             page.locator(".pick-reason summary").first.click()
             expect(page.locator(".pick-reason").first).to_contain_text("not predicted fair values")

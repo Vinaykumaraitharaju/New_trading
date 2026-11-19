@@ -62,7 +62,8 @@ class EditionContext:
                                 accepted = datetime.fromisoformat(stamp.replace("Z", "+00:00"))
                                 if accepted.tzinfo and accepted.timestamp() <= time.time():
                                     data["filings"][symbol] = dict(form=form, published=accepted.timestamp(),
-                                                                   received=time.time(), accession=accession)
+                                                                   received=time.time(), accession=accession,
+                                                                   url=f"https://www.sec.gov/Archives/edgar/data/{cik}/{accession.replace('-', '')}/{accession}-index.html")
                                 break
                     except (requests.RequestException, KeyError, TypeError, ValueError):
                         data["sec_status"] = "SEC partial or unavailable"

@@ -194,6 +194,14 @@ class TimedEditions:
                 else:
                     p, reason = assess_candidate(symbol, rows, slot)
                     usable += int(reason not in {COVERAGE, BOOK})
+                    if reason == COVERAGE:
+                        stamps = [r[0] for r in rows if slot-300 <= r[0] < slot]
+                        gap = max((b-a for a,b in zip(stamps,stamps[1:])), default=0)
+                        reason = "; ".join(msg for failed,msg in (
+                            (count<12, f"{count} observations; minimum 12"),
+                            (stamps[0]>slot-270, f"First quote {stamps[0]-slot+300:.1f}s into window; limit 30s"),
+                            (slot-stamps[-1]>10, f"Last quote {slot-stamps[-1]:.1f}s old; limit 10s"),
+                            (gap>GAP, f"Longest gap {gap:.1f}s; limit {GAP}s")) if failed)
                     if p and market_move is not None and market_move*(1 if p["direction"]=="Bullish" else -1)<-.001:
                         p, reason = None, "Opposing five-minute NIFTY move"
                     if p and any(r[0] >= slot and (r[4] >= p["entry"] if p["direction"]=="Bullish"

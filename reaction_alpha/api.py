@@ -565,6 +565,7 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
     def timed_editions(slot: int | None = None):
         data = service.editions.snapshot(time.time(), slot) if service.editions else {"editions": []}
         return {**data, "mode": "simulated" if service.config.simulated else "live",
+                "daily_movers": service.movers.report(time.time()) if service.movers else None,
                 "context": service.edition_context.latest}
 
     @app.get("/api/demo/market-strip")
