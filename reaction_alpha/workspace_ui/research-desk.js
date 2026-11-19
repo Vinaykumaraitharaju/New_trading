@@ -95,7 +95,15 @@ async function loadEditions(){
  if(prefix||editionBusy||document.hidden)return;editionBusy=true;
  try{
  const requested=isHistory&&/^\d+$/.test(params.get('edition')||'')?'?slot='+params.get('edition'):'';
- const d=await get('/api/timed-editions'+requested);if(d.mode!=='live')return;
+ const compare=isHistory&&tab==="performance";
+ const d=await get('/api/timed-editions'+requested+(compare?(requested?'&':'?')+'horizons=true':''));if(d.mode!=='live')return;
+ if(compare){
+ const panel=$("horizonTrials");panel.hidden=false;
+ panel.innerHTML='<h2>T1 after entry: 10, 20 or 30 minutes?</h2><p>Same entered setups, frozen target and stop. Research only.</p>'+
+ table(['From entry','T1 first / stop first','Timed exit','Missing / tracking','Too near close','Comparable entries / sessions','Mean net return'],(d.horizon_trials||[]).map(r=>[
+ r.minutes+' min',r.hits+' / '+r.stops,r.timed,r.missing+' / '+r.tracking,r.late,r.paired+' / '+r.sessions,r.avg_net_bps==null?'Not measured':esc(r.avg_net_bps)+' bps'
+ ]),'No new timed entries measured yet.')+'<small>Net return compares only entries with verified bid/ask exits for all three horizons, less an assumed 10 bps round trip. Not actual fees or fills. Entries without 30 minutes before close are excluded from comparison.</small>';
+ }
  const old=$("editionSlot").value;deskData=d;
  paintMovers(d.daily_movers,d.mover_sweep);
  const options=isHistory?(d.editions||[]).map(e=>({slot:e.slot,phase:'Archived'})):(d.schedule?.slots||[]);

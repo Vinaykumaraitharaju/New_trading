@@ -21,6 +21,17 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 
 ## Implemented Evidence
 
+History > Performance compares 10/20/30 minutes from the **same recorded timed
+entry**. The original publication deadlines and 30-minute direction scorecard
+are unchanged. The first post-entry verified trade touching T1 or stop before
+each deadline ends that arm. Otherwise use the first trade at/after deadline
+(15-second tolerance). Disconnect, restart or >45s observation gap censors
+unfinished arms. For equal opportunity require all 30 minutes before close.
+The paired mean uses only entries with observable entry/exit bid-ask prices
+for all horizons, minus an illustrative 10 bps round-trip cost. This is not
+broker-specific taxation or guaranteed execution. Compare across future sessions
+before selecting a horizon; never infer an optimal deadline from hit rate alone.
+
 NSE EQ mover discovery is separate from the small live trading subscription.
 During supported open sessions a background worker scans batches of up to 20
 instruments from the authenticated Kotak NSE cash master with a five-second

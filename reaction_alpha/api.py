@@ -562,9 +562,10 @@ def create_app(config: ReactionAlphaConfig | None = None) -> FastAPI:
         return service.market_strip_snapshot()
 
     @app.get("/api/timed-editions")
-    def timed_editions(slot: int | None = None):
+    def timed_editions(slot: int | None = None, horizons: bool = False):
         data = service.editions.snapshot(time.time(), slot) if service.editions else {"editions": []}
         return {**data, "mode": "simulated" if service.config.simulated else "live",
+                "horizon_trials": service.editions.horizons.report() if horizons and service.editions else [],
                 "daily_movers": service.movers.report(time.time()) if service.movers else None,
                 "mover_sweep": service.mover_sweep.report(time.time()) if service.mover_sweep else None,
                 "context": service.edition_context.latest}

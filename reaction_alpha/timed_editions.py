@@ -8,6 +8,7 @@ import sqlite3
 
 from .market_strip import IST, NAMES, session
 from .research_desk import day_schedule, deadlines, evaluate
+from .horizon_trial import HorizonTrials
 
 GAP = 45
 COVERAGE = "Need five-minute coverage, a quote within 10 seconds, and no gap over 45 seconds"
@@ -73,6 +74,7 @@ def market_change(samples, slot):
 class TimedEditions:
     def __init__(self, path):
         self.path = path
+        self.horizons = HorizonTrials(path)
         self.lock = RLock()
         self.samples = defaultdict(lambda: deque(maxlen=360))
         self.active = None
@@ -111,6 +113,7 @@ class TimedEditions:
                 previous = buf.pop()
                 hi, lo = max(price, previous[4]), min(price, previous[5])
             buf.append((epoch, price, bid, ask, hi, lo))
+            self.horizons.update(epoch,symbol,price,bid,ask)
             if not self.active:
                 return
             for p in self.active["picks"]:
@@ -118,6 +121,8 @@ class TimedEditions:
                     continue
                 old = p["state"]
                 self.advance(p, epoch, price)
+                if old=="Waiting" and p["state"]=="Entered" and p.get("id"):
+                    self.horizons.start(p,epoch,bid,ask)
                 if p["state"] != old:
                     self.save()
 
@@ -157,6 +162,7 @@ class TimedEditions:
     def tick(self, now, connected, context=None, subscribed=None):
         with self.lock:
             self.connected = connected
+            self.horizons.update(now,connected=connected)
             if not connected:
                 self.samples.clear()
             if self.active:
