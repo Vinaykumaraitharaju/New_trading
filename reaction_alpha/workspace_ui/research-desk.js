@@ -36,6 +36,7 @@ function paintEdition(){
  if(!e&&provisional)e={slot:selection,picks:preview.picks,connected:preview.connected,nifty_move:preview.nifty_move};
  const opened=new Set([...document.querySelectorAll('.pick-reason[open]')].map(x=>x.dataset.reason));
  const focused=document.activeElement?.closest('.pick-reason')?.dataset.reason;
+ const keepExclusions=$("savedExclusions")?.open && $("savedExclusions").dataset.slot===String(selection);
  const phase=provisional?'Provisional':window?.phase||(e?'Archived':'No scheduled session');
  let html='<div class="window-status"><b>'+esc(phase)+'</b><span>'+esc(schedule.date||'')+' · All times IST</span>'+(isHistory?'':'<a href="'+hist+'?tab=forecasts">Past editions &rarr;</a>')+'</div>';
  if(selection){
@@ -50,7 +51,13 @@ function paintEdition(){
  '<b class="'+(p.direction==='Bearish'?'down':'up')+'">'+esc(p.direction)+'</b><small>'+(p.entered?'Entry '+esc(deskStamp(p.entered)):p.state==='Waiting'||provisional?'Verified trade '+(p.direction==='Bearish'?'at or below ':'at or above ')+px(p.entry):esc(p.state))+'</small>',
  px(p.entry)+'<small>Stop '+px(p.stop)+'</small>',px(p.t1)+'<small>T2 '+px(p.t2)+'</small>',
  '<small>'+(p.prior_calls?esc(p.prior_t1)+' / '+esc(p.prior_calls)+' prior calls reached T1 in time; '+esc(p.prior_days)+' sessions':'No comparable prior-session evidence')+'</small>'+reasoning(p,e,provisional)
- ]),e.connected?'No qualifying setup with fresh five-minute coverage.':'Feed disconnected at publication.');
+ ]),e.connected?'No picks published for this window.':'Feed disconnected at publication.');
+ if(!provisional){
+ const d=e.diagnostics;
+ html+=d?'<div class="window-status"><b>At publication</b><span>'+esc(d.subscribed)+' subscribed → '+esc(d.usable)+' with usable quotes → '+esc(d.qualified)+' qualified → '+esc(d.published)+' published</span></div>'+
+ (d.excluded.length?'<details class="context-sources" id="savedExclusions"><summary>Why stocks were excluded ('+esc(d.excluded.length)+')</summary>'+table(['Stock','Verified observations','First reason'],d.excluded.map(r=>[esc(r.symbol),esc(r.observations??'Unknown'),esc(r.reason)]),'')+'</details>':''):
+ '<p class="desk-caption">This older window did not record rejection reasons.</p>';
+ }
  }else{
  const msg=!selection?(schedule.session==='unknown'?'Calendar unavailable for this date. No trade windows published.':'No supported trading windows today.'):
  window?.phase==='Not recorded'?'This window was not published. It will not be reconstructed using later prices.':
@@ -64,6 +71,7 @@ function paintEdition(){
  }
  html+=sourceLine(e?.context||deskData.context);
  $("editionReport").innerHTML=html;
+ if($("savedExclusions")){ $("savedExclusions").dataset.slot=String(selection); $("savedExclusions").open=!!keepExclusions; }
  document.querySelectorAll('.pick-reason').forEach(x=>{
  if(opened.has(x.dataset.reason)||params.get('pick')===x.dataset.reason.split(':')[1])x.open=true;
  if(x.dataset.reason===focused)x.querySelector('summary').focus({preventScroll:true});

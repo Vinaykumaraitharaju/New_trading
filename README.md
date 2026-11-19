@@ -21,6 +21,11 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 
 ## Implemented Evidence
 
+Each new timed edition archives the equity subscription count, usable five-minute
+quotes, qualified setups, published picks, and first exclusion reason per omitted
+symbol. Zero verified observations means none reached the edition evaluator, not
+necessarily that the exchange saw no trades. Historical reasons are not backfilled.
+
 Scanner labels market direction from the three index changes versus previous
 close. At least two fresh indices must agree for Bullish/Bearish. Conflicting
 readings remain visible. This describes the indices, not the cause of the move

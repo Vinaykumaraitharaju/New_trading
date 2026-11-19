@@ -68,6 +68,24 @@ def test_dated_reference():
         "date":"2026-11-16", "usd_inr":90}
 
 
+def test_publication_diagnostics_survive_restart(tmp_path):
+    b = TimedEditions(str(tmp_path/"paper.db"))
+    for t in range(0, 300, 5):
+        for i in range(6):
+            price = 100+t/200
+            b.observe(str(i), SLOT-300+t, price, price-.01, price+.01)
+        b.observe("FLAT", SLOT-300+t, 100, 99.99, 100.01)
+        b.observe("NOBOOK", SLOT-300+t, 100, 0, 0)
+    b.tick(SLOT, True, subscribed=[str(i) for i in range(6)]+["FLAT","NOBOOK","SILENT","NIFTY"])
+    d = TimedEditions(b.path).recent(1)[0]["diagnostics"]
+    assert [d[k] for k in ("subscribed","usable","qualified","published")] == [9,7,6,5]
+    reasons = {r["symbol"]:r for r in d["excluded"]}
+    assert reasons["SILENT"]["observations"] == 0
+    assert "range" in reasons["FLAT"]["reason"]
+    assert "bid" in reasons["NOBOOK"]["reason"]
+    assert "top five" in reasons["5"]["reason"]
+
+
 def test_opposing_index_filters_without_creating_index_pick(tmp_path):
     b = TimedEditions(str(tmp_path/"paper.db"))
     for t in range(0, 300, 5):

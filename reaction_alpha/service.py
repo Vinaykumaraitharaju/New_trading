@@ -159,7 +159,8 @@ class ReactionAlphaService:
         while not self._stop_event.is_set():
             try:
                 self.editions.tick(time.time(), bool(self._router and self._router.kotak.stream_connected),
-                                   self.edition_context.latest)
+                                   self.edition_context.latest,
+                                   subscribed=[s["symbol"] for s in self._subscriptions if not s.get("is_index")])
             except Exception:
                 log.exception("Timed edition clock failed")
             self._stop_event.wait(1)
