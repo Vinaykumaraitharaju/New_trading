@@ -86,6 +86,18 @@ def test_publication_diagnostics_survive_restart(tmp_path):
     assert "top five" in reasons["5"]["reason"]
 
 
+def test_comparison_labels_only_use_available_prepublication_ticks(tmp_path):
+    b = TimedEditions(str(tmp_path/"paper.db"))
+    b.tick(SLOT-1, True)
+    for offset in range(0, 300, 5):
+        b.observe("ABC", SLOT-300+offset, 100+offset/100, 0, 0)
+        b.observe("NIFTY", SLOT-300+offset, 100-offset/100, 0, 0)
+    b.observe("ABC", SLOT+1, 50, 0, 0)
+    assert b.comparison_labels(["ABC","ABSENT"], SLOT) == {"ABC":"BULLISH","NIFTY":"BEARISH"}
+    b.tick(SLOT+2, False)
+    assert b.comparison_labels(["ABC"], SLOT+2) == {}
+
+
 def test_opposing_index_filters_without_creating_index_pick(tmp_path):
     b = TimedEditions(str(tmp_path/"paper.db"))
     for t in range(0, 300, 5):

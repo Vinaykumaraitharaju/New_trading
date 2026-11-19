@@ -15,7 +15,7 @@ def test_publication_to_outcome_survives_restart(tmp_path, sign, side):
     start = datetime(2026, 11, 13, 10)
     setup = dict(symbol="ABC", side=side, entry_low=100, entry_high=100, ltp=100,
                  target1=100+sign, target2=100+2*sign, stop_loss=100-sign,
-                 market_bias="BULLISH", scanner_band="watchlist")
+                 market_bias="BULLISH", nifty_5m="BEARISH", stock_5m=None, scanner_band="watchlist")
     book.archive_pretrade_setups([setup], generated_at=start, source="simulated")
     assert setup["setup_state"] == "WATCHING"
 
@@ -38,6 +38,9 @@ def test_publication_to_outcome_survives_restart(tmp_path, sign, side):
     assert row["entered_at"] < row["t1_at"] < row["exited_at"]
     stats, = report["direction_30m_by_source"]
     assert (stats["paired"], stats["scanner_correct"], stats["market_correct"]) == (1, 1, int(sign == 1))
+    nifty, stock = report["direction_scorecard"]
+    assert (nifty["paired"], nifty["disagreements"], nifty["scanner_wins"], nifty["baseline_wins"]) == (1,int(sign==1),int(sign==1),0)
+    assert (stock["measured"], stock["paired"]) == (1,0)
 
 
 @pytest.mark.parametrize("seconds,price,expected", [(1, 104, "MISSED_ENTRY"), (3000, 104, "UNRESOLVED"), (1, 97, "INVALIDATED")])

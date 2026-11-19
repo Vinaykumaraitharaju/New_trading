@@ -243,6 +243,17 @@ class TimedEditions:
             return [json.loads(row[0]) for row in db.execute(
                 "SELECT payload FROM timed_editions ORDER BY slot DESC LIMIT ?", (limit,))]
 
+    def comparison_labels(self, symbols, now):
+        with self.lock:
+            if not self.connected or session(now) != "open":
+                return {}
+            labels = {}
+            for symbol in set(symbols) | {"NIFTY"}:
+                move = market_change(self.samples.get(symbol, ()), now)
+                if move is not None:
+                    labels[symbol] = "BULLISH" if move > .002 else "BEARISH" if move < -.002 else "NEUTRAL"
+            return labels
+
     def snapshot(self, now, selected_slot=None):
         """Cheap read projection; does not call the broker, scan, or publish an edition."""
         local = datetime.fromtimestamp(now, IST)

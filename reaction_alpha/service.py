@@ -518,6 +518,11 @@ class ReactionAlphaService:
             setup["scanner_band"] = self._pretrade_band(setup)
             setup["scanner_label"] = self._pretrade_label(setup)
         generated_at = datetime.now()
+        if self.editions is not None and not self.config.simulated:
+            labels = self.editions.comparison_labels([s["symbol"] for s in setups], generated_at.timestamp())
+            for setup in setups:
+                setup["nifty_5m"] = labels.get("NIFTY")
+                setup["stock_5m"] = labels.get(setup["symbol"])
         source = "simulated" if self.config.simulated else source
         self.paper_trades.archive_pretrade_setups(setups, generated_at=generated_at, source=source)
         band_priority = {

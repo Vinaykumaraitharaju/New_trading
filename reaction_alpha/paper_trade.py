@@ -195,6 +195,9 @@ class PaperTradeBook:
             trial_columns = {r["name"] for r in conn.execute("PRAGMA table_info(pretrade_direction_trials)")}
             if "shadow_direction" not in trial_columns:
                 conn.execute("ALTER TABLE pretrade_direction_trials ADD COLUMN shadow_direction TEXT")
+            for column in ("nifty_5m", "stock_5m"):
+                if column not in trial_columns:
+                    conn.execute(f"ALTER TABLE pretrade_direction_trials ADD COLUMN {column} TEXT")
             init_memory(conn)
 
     def _migrate_pending_trades_to_candidates(self, conn: sqlite3.Connection) -> None:
@@ -319,9 +322,11 @@ class PaperTradeBook:
                     )
                     existing = conn.execute("SELECT * FROM pretrade_predictions WHERE id=?", (inserted.lastrowid,)).fetchone()
                     conn.execute("""INSERT INTO pretrade_direction_trials
-                                 (setup_id,symbol,source,start_by,published_at,baseline,shadow_direction) VALUES (?,?,?,?,?,?,?)""",
+                                 (setup_id,symbol,source,start_by,published_at,baseline,shadow_direction,nifty_5m,stock_5m)
+                                 VALUES (?,?,?,?,?,?,?,?,?)""",
                                  (existing["id"], parsed["symbol"], source, (now_dt + timedelta(minutes=1)).isoformat(timespec="microseconds"),
-                                  now, str(setup.get("market_bias") or "UNKNOWN").upper(), setup["shadow"]["direction"]))
+                                  now, str(setup.get("market_bias") or "UNKNOWN").upper(), setup["shadow"]["direction"],
+                                  setup.get("nifty_5m"), setup.get("stock_5m")))
                 ctx = json.loads(existing["context_json"])
                 setup["price_as_of_ist"] = indian_time(existing["updated_at"])
                 setup["expires_at_ist"] = indian_time(existing["expires_at"])
@@ -491,6 +496,19 @@ class PaperTradeBook:
                     SUM(CASE WHEN baseline=actual THEN 1 ELSE 0 END) AS market_correct
                 FROM pretrade_direction_trials JOIN pretrade_predictions ON setup_id=id
                 {where_clause} GROUP BY source""", params).fetchall()
+            scorecard = []
+            for col in ("nifty_5m", "stock_5m"):
+                rows = conn.execute(f"""
+                    SELECT source, count(*) published, count(actual) measured,
+                        count(CASE WHEN actual IS NOT NULL AND {col} IS NOT NULL THEN 1 END) paired,
+                        count(CASE WHEN actual IS NOT NULL AND direction != {col} THEN 1 END) disagreements,
+                        count(CASE WHEN direction != {col} AND direction=actual THEN 1 END) scanner_wins,
+                        count(CASE WHEN direction != {col} AND {col}=actual THEN 1 END) baseline_wins,
+                        count(CASE WHEN actual='NEUTRAL' AND {col} IS NOT NULL THEN 1 END) flat,
+                        count(CASE WHEN actual IS NULL AND coalesce(end_by,start_by) < ? THEN 1 END) missing
+                    FROM pretrade_direction_trials JOIN pretrade_predictions ON setup_id=id GROUP BY source
+                    """, (datetime.now().isoformat(timespec="microseconds"),)).fetchall()
+                scorecard.extend(dict(row, comparator=col) for row in rows)
             recent = conn.execute(
                 f"""
                 SELECT id, symbol, direction, setup_type, regime, scanner_band, state, result,
@@ -511,6 +529,7 @@ class PaperTradeBook:
             "session_date": session_date or self.session_date(),
             "summary": self.pretrade_archive_summary(session_date=session_date),
             "direction_30m_by_source": [dict(row) for row in direction_trials],
+            "direction_scorecard": scorecard,
             "experience": self.experience.report(),
             "by_setup": [self._archive_group_row(row) for row in by_setup],
             "by_symbol": [self._archive_symbol_row(row) for row in by_symbol],

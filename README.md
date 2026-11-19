@@ -21,6 +21,14 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 
 ## Implemented Evidence
 
+History > Performance now includes a Direction scorecard across archived sessions,
+separated by source. New live forecasts freeze NIFTY and stock five-minute
+continuation baselines when timestamped coverage is available. Each uses a
+neutral band of +/-0.2%. The existing 30-minute trial measures stock movement
+from its first eligible post-publication trade, independently of entry. Only
+measured pairs that disagree count toward scanner vs baseline wins. This is
+prospective evaluation, not model training or a cost-adjusted trading return.
+
 Each new timed edition archives the equity subscription count, usable five-minute
 quotes, qualified setups, published picks, and first exclusion reason per omitted
 symbol. Zero verified observations means none reached the edition evaluator, not
