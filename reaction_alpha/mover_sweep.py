@@ -95,11 +95,11 @@ class MoverSweep:
                         if not names:
                             raise ValueError("Empty NSE EQ universe")
                         self.total,day,cursor=len(names),today,0
-                    chunk=names[cursor:cursor+50]
+                    chunk=names[cursor:cursor+20]
                     quotes=feed.quote_token_snapshot({k:instruments[k] for k in chunk})
                     accepted=self.ingest(quotes,time.time())
                     cursor=(cursor+len(chunk))%len(names)
-                    self.status=f"Last batch: {accepted}/{len(chunk)} dated quotes usable"
+                    self.status=f"Last batch: {len(chunk)} requested, {len(quotes)} returned, {accepted} dated quotes usable"
             except Exception as exc:
                 self.status="Sweep unavailable; retrying after 60 seconds"
                 logging.getLogger(__name__).warning("Mover sweep paused (%s)",type(exc).__name__)

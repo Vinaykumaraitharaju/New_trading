@@ -22,7 +22,7 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 ## Implemented Evidence
 
 NSE EQ mover discovery is separate from the small live trading subscription.
-During supported open sessions a background worker scans batches of up to 50
+During supported open sessions a background worker scans batches of up to 20
 instruments from the authenticated Kotak NSE cash master with a five-second
 pause. Only same-session, dated quotes with valid high/low/previous close count.
 The current session high or low may show a threshold that the latest price no

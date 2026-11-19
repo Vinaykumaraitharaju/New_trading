@@ -202,6 +202,8 @@ class KotakNeoFeed:
         reverse = {str(token): symbol for symbol, token in tokens.items()}
         rows: list[dict] = []
         token_items = list(tokens.items())
+        # The all-quotes endpoint can return HTTP 400 for 50 symbols.
+        batch_size = min(20, max(1, batch_size))
         for i in range(0, len(token_items), max(batch_size, 1)):
             chunk = token_items[i:i + max(batch_size, 1)]
             request = [{"instrument_token": token, "exchange_segment": exchange_segment} for _, token in chunk if token]
