@@ -21,8 +21,9 @@ def eq_universe(master):
     return result
 
 
-def trade_epoch(raw):
-    value = next((raw[k] for k in ("last_trade_time","last_traded_time","lastTradeTime","ltt") if raw.get(k)), None)
+def quote_epoch(raw):
+    # Kotak REST 'all' quotes use lstup_time (snapshot update, not trade time).
+    value = next((raw[k] for k in ("last_trade_time","last_traded_time","lastTradeTime","ltt","lstup_time") if raw.get(k)), None)
     try:
         n = float(value)
         return n/1000 if n >= 1e12 else n
@@ -49,7 +50,7 @@ class MoverSweep:
         day = datetime.fromtimestamp(now,IST).date()
         batch = []
         for symbol,r in quotes.items():
-            ts = trade_epoch(r.get("raw") or {})
+            ts = quote_epoch(r.get("raw") or {})
             if not ts or not isfinite(ts) or not now-86400 < ts <= now or datetime.fromtimestamp(ts,IST).date()!=day or session(ts)!="open":
                 continue
             try:

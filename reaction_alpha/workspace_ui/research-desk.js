@@ -118,7 +118,7 @@ function paintMovers(d,sweep){
  box.hidden=false;
  box.innerHTML='<h2>Today’s ±4% movers</h2>'+
  (sweep?'<h3>NSE EQ discovery</h3><p>'+esc(sweep.covered)+' stocks verified today / '+esc(sweep.universe||"unknown")+' in broker universe · '+esc(sweep.status)+'</p>'+
- table(['Stock','Reached today','Latest snapshot','Last trade (IST)'],sweep.movers.map(r=>[esc(r.symbol),
+ table(['Stock','Reached today','Latest snapshot','Quote as of (IST)'],sweep.movers.map(r=>[esc(r.symbol),
  [r.up?'High '+esc(signedFmt.format(r.high_pct))+'%':'',r.down?'Low '+esc(signedFmt.format(r.low_pct))+'%':''].filter(Boolean).join(' / '),
  px(r.price)+' ('+esc(signedFmt.format(r.current_pct))+'%)',esc(deskStamp(r.trade))]),sweep.covered?'No threshold reached in verified coverage.':'No dated EQ snapshots verified yet.')+
  '<p class="desk-caption">Session highs and lows can reveal an earlier move. Exact touch time and news cause are unknown.</p>':'')+
