@@ -21,6 +21,14 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 
 ## Implemented Evidence
 
+NSE EQ mover discovery is separate from the small live trading subscription.
+During supported open sessions a background worker scans batches of up to 50
+instruments from the authenticated Kotak NSE cash master with a five-second
+pause. Only same-session, dated quotes with valid high/low/previous close count.
+The current session high or low may show a threshold that the latest price no
+longer meets. These retrospective discoveries are not forecast wins, fills, or
+timestamped first touches. Coverage and errors are shown alongside results.
+
 **Daily +/-4% study:** Scanner lists the first verified touch of each boundary
 against the stock's same-session reference close, even if the move reverses.
 Coverage is the monitored live feed, not the entire exchange. First observed

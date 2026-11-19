@@ -97,7 +97,7 @@ async function loadEditions(){
  const requested=isHistory&&/^\d+$/.test(params.get('edition')||'')?'?slot='+params.get('edition'):'';
  const d=await get('/api/timed-editions'+requested);if(d.mode!=='live')return;
  const old=$("editionSlot").value;deskData=d;
- paintMovers(d.daily_movers);
+ paintMovers(d.daily_movers,d.mover_sweep);
  const options=isHistory?(d.editions||[]).map(e=>({slot:e.slot,phase:'Archived'})):(d.schedule?.slots||[]);
  $("editions").hidden=false;$("editionTitle").textContent=isHistory?'Timed forecast archive':"Today's trade windows";
  $("editionSlot").innerHTML=options.map(r=>'<option value="'+r.slot+'">'+esc(isHistory?indexStamp.format(r.slot*1000):slotTime(r.slot))+' · '+esc(r.phase)+'</option>').join('');
@@ -112,11 +112,17 @@ async function loadEditions(){
  }finally{editionBusy=false}
 }
 
-function paintMovers(d){
+function paintMovers(d,sweep){
  const box=$("dailyMovers");if(!d){box.hidden=true;return}
  const expanded=box.querySelector('details')?.open;
  box.hidden=false;
- box.innerHTML='<h2>Today’s ±4% movers</h2><p class="desk-caption">'+esc(d.day)+' IST · '+esc(d.covered)+' monitored stocks with a verified reference close · First observed touches, not closing returns</p>'+
+ box.innerHTML='<h2>Today’s ±4% movers</h2>'+
+ (sweep?'<h3>NSE EQ discovery</h3><p>'+esc(sweep.covered)+' stocks verified today / '+esc(sweep.universe||"unknown")+' in broker universe · '+esc(sweep.status)+'</p>'+
+ table(['Stock','Reached today','Latest snapshot','Last trade (IST)'],sweep.movers.map(r=>[esc(r.symbol),
+ [r.up?'High '+esc(signedFmt.format(r.high_pct))+'%':'',r.down?'Low '+esc(signedFmt.format(r.low_pct))+'%':''].filter(Boolean).join(' / '),
+ px(r.price)+' ('+esc(signedFmt.format(r.current_pct))+'%)',esc(deskStamp(r.trade))]),sweep.covered?'No threshold reached in verified coverage.':'No dated EQ snapshots verified yet.')+
+ '<p class="desk-caption">Session highs and lows can reveal an earlier move. Exact touch time and news cause are unknown.</p>':'')+
+ '<h3>Live research sample</h3><p class="desk-caption">'+esc(d.day)+' IST · '+esc(d.covered)+' monitored stocks with a verified reference close · First observed touches, not closing returns</p>'+
  table(['Stock','First move','At touch / previous close','Market context','Company evidence'],d.movers.map(r=>{
  const f=r.filing;
  return [esc(r.symbol),'<b class="'+(r.side==='Up'?'up':'down')+'">'+esc(signedFmt.format(r.percent))+'%</b><small>'+esc(deskStamp(r.at))+'</small>',

@@ -44,6 +44,7 @@ from .trade_levels import build_trade_levels, resolve_trade_state
 from .engines.scoring_engine import UnifiedScore
 from .market_strip import IST, MarketStrip, NAMES
 from .daily_movers import DailyMovers
+from .mover_sweep import MoverSweep
 from .demo_tape import trade_arrivals
 from .timed_editions import TimedEditions
 from .edition_context import EditionContext
@@ -138,6 +139,7 @@ class ReactionAlphaService:
         self._stop_event = threading.Event()
         self.editions = None
         self.movers = None
+        self.mover_sweep = None
         self.edition_context = EditionContext()
         self._live_status = "idle"
         self._last_verified_trade = None
@@ -153,6 +155,9 @@ class ReactionAlphaService:
         else:
             self.editions = TimedEditions(self.config.paper_trade_db_path)
             self.movers = DailyMovers(self.config.paper_trade_db_path)
+            self.mover_sweep = MoverSweep(self.config.paper_trade_db_path)
+            threading.Thread(target=self.mover_sweep.run,args=(self._stop_event,lambda: self._router.kotak if self._router else None),
+                             daemon=True,name="eq-mover-sweep").start()
             threading.Thread(target=self.edition_context.run, args=(self._stop_event,),
                              daemon=True, name="edition-context").start()
             threading.Thread(target=self._edition_clock, daemon=True, name="edition-clock").start()
