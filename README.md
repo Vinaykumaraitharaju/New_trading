@@ -21,6 +21,22 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 
 ## Implemented Evidence
 
+Scanner's "Why now?" compares the latest fresh trade with frozen entry,
+invalidation and T1. A recorded entry isn't a new entry. Prices at/beyond T1
+without recorded entry are too late; stale quotes don't confirm a trade.
+Live rankings and archive transitions remain independent from this readout.
+
+Fixed news experiment v1: poll RELIANCE, INFY, ICICIBANK, TCS, HDFCBANK, SBIN,
+BALAXI and CRAVATEX irrespective of mover status. Freeze one comparison per
+eligible symbol/session on the first fresh morning snapshot before 11:00 IST
+with both session extremes still inside +/-4%. Price arm follows the return
+from previous close (neutral within +/-0.2%); shadow arm can override from a
+simple directional event phrase in the latest headline already observed and
+published in the preceding 24 hours. Both exit on the same first fresh quote
+from 15:00 to 15:30. Report equal-weight mean returns, with an illustrative
+10 bps cost per directional position. This is not a broker fill simulation.
+Missing exits are not scored; watchlist selection limits generalisation.
+
 The mover sweep queues free Google News RSS searches separately from quote
 collection. The "Why this move?" column shows up to two matching event headlines
 from the past seven days with publisher, publication time, lookup status and

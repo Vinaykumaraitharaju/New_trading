@@ -71,6 +71,20 @@ def run():
             expect(page.locator("#editionReport")).to_contain_text("Frozen at publication")
             expect(page.locator("#dailyMovers")).to_contain_text("Already beyond threshold")
             expect(page.locator("#dailyMovers")).to_contain_text("No verified company-specific cause")
+            states=page.evaluate("""async () => {
+              const now=Math.floor(Date.now()/1000);
+              const s={symbol:'SAMPLE',side:'LONG',trigger_price:505,stop_loss:500,target1:512,setup_type:'Breakout'};
+              const q={epoch:now,price:503,status:'live'};
+              setups=[s]; ticker={SAMPLE:q}; scanner(); await detail('SAMPLE');
+              const message=document.querySelector('#decisionText').textContent;
+              const labels=[entryRead(s,{...q,price:513},now)[0],
+                entryRead({...s,side:'SHORT',stop_loss:510,target1:498},{...q,price:497},now)[0],
+                entryRead(s,q,now+16)[0],entryRead({...s,setup_state:'ENTERED'},q,now)[0]];
+              document.querySelector('#detail').close();selected='';setups=[];scanner();
+              return [message,...labels];
+            }""")
+            assert "Wait for entry" in states[0] and "planned risk" in states[0]
+            assert states[1:]==["Missed move","Missed move","Cannot verify entry now","Entry already recorded"]
             page.screenshot(path=OUT/f"timed-scanner-{width}.png", full_page=True)
             page.locator(".pick-reason summary").first.click()
             expect(page.locator(".pick-reason").first).to_contain_text("not predicted fair values")

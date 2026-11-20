@@ -6,6 +6,7 @@ import time
 import logging
 import json
 from .mover_news import MoverNews
+from . import news_trial
 
 from .market_strip import IST, session
 
@@ -47,6 +48,7 @@ class MoverSweep:
         self.company_names = {}
         self.news = MoverNews(path)
         with sqlite3.connect(path) as db:
+            news_trial.initialize(db)
             db.execute("""CREATE TABLE IF NOT EXISTS mover_sweep_v1(day TEXT,symbol TEXT,close REAL,high REAL,low REAL,
                 price REAL,trade REAL,checked REAL,PRIMARY KEY(day,symbol))""")
 
@@ -64,6 +66,7 @@ class MoverSweep:
             if all(isfinite(x) and x>0 for x in (close,hi,lo,ltp)) and lo<=ltp<=hi:
                 batch.append((day.isoformat(),symbol,close,hi,lo,ltp,ts,now))
         with sqlite3.connect(self.path) as db:
+            news_trial.sample(db,batch)
             db.executemany("""INSERT INTO mover_sweep_v1 VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(day,symbol)
                 DO UPDATE SET high=excluded.high, low=excluded.low,price=excluded.price,close=excluded.close,
                 trade=excluded.trade,checked=excluded.checked WHERE excluded.trade>=trade""",batch)
@@ -87,7 +90,11 @@ class MoverSweep:
                 "SELECT * FROM mover_news_v1 WHERE day=?",(day,))}
             for r in moves:
                 r["news"]=news.get(r["symbol"])
-        return dict(universe=self.total,covered=n,status=self.status,movers=moves)
+            experiment=news_trial.report(db,day)
+            latest={r["symbol"]:dict(r) for r in db.execute("""SELECT e.symbol,e.title,e.published,e.first_seen,e.url,e.publisher
+                FROM mover_news_evidence_v1 e WHERE published BETWEEN ? AND ? AND first_seen<=?
+                ORDER BY published,first_seen""",(now-7*86400,now,now))}
+        return dict(universe=self.total,covered=n,status=self.status,movers=moves,news_trial=experiment,latest_news=latest)
 
     def run(self,stop,get_feed):
         day=None

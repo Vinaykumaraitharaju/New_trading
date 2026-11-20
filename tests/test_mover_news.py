@@ -34,4 +34,5 @@ def test_worker_persists_link_and_does_not_refetch_on_report(tmp_path,monkeypatc
     b.news.step({},now)
     b.news.step({},now+10)
     n=MoverSweep(b.path).report(now)["movers"][0]["news"]
-    assert len(calls)==1 and n["detected"]==now and n["items"][0]["published"]==now-60
+    assert len(calls)==2 and calls[0]["params"]["q"]!=calls[1]["params"]["q"]
+    assert n["detected"]==now and n["items"][0]["published"]==now-60

@@ -31,7 +31,7 @@ function scanner(){
  $("content").innerHTML=table(["Stock","Outlook","Readiness","Last price","Entry condition","Invalidation"],rows.map(s=>[
  '<a data-stock="'+esc(s.symbol)+'" href="'+esc(scanUrl(s.symbol))+'">'+esc(s.symbol)+'</a><small>'+esc(s.sector)+'</small>',
  '<b class="'+(direction(s)==="Bearish"?"down":"up")+'">'+direction(s)+'</b><small>30 min</small>',
- '<span class="badge '+(s.scanner_band==="trade-ready"?"ready":s.scanner_band==="near-trigger"?"warn":"")+'">'+esc(bands[s.scanner_band]||"Watching")+'</span>','<span data-price="'+esc(s.symbol)+'">'+px(s.ltp)+'</span><small data-quote-time>Scan snapshot</small>',esc(condition(s)),px(s.stop_loss)]),"No setups match this filter.");
+ '<span data-decision="'+esc(s.symbol)+'">Checking quote</span>','<span data-price="'+esc(s.symbol)+'">'+px(s.ltp)+'</span><small data-quote-time>Scan snapshot</small>',esc(condition(s)),px(s.stop_loss)]),"No setups match this filter.");
  paintTicker();
  if(selected)document.querySelector('a[data-stock="'+CSS.escape(selected)+'"]')?.closest("tr").classList.add("selected");
 }
@@ -61,6 +61,7 @@ function directionScorecard(groups){
 async function detail(symbol){selected=symbol;const s=setups.find(x=>x.symbol===symbol),dlg=$("detail");if(!dlg.open)dlg.showModal();
  $("detailBody").innerHTML='<div class="eyebrow">STOCK DETAIL</div><h2 id="detailTitle">'+esc(symbol)+'</h2>';
  $("detailBody").insertAdjacentHTML("beforeend",'<section id="stockQuote" aria-label="Stock quote"></section>');paintStockQuote();
+ if(s){$("detailBody").insertAdjacentHTML("beforeend",'<section class="note"><b>Why now?</b><p id="decisionText"></p><small id="decisionNews"></small></section>');paintDecisions()}
  if(!s){const d=await get(api+"/signals/"+encodeURIComponent(symbol));if(selected===symbol)$("detailBody").insertAdjacentHTML("beforeend",'<p>No ranked setup for this symbol.</p><dl><dt>Signal state</dt><dd>'+esc(d.state||"Not active")+'</dd><dt>Last observation</dt><dd>'+esc(d.observation_ist||"Not recorded")+'</dd><dt>Last price</dt><dd>'+px(d.last_price)+'</dd></dl>');return}
  const fields=[["Outlook",direction(s)+" / 30 min"],["Setup",s.setup_type],["Entry condition",condition(s)],["Invalidation",px(s.stop_loss)],["T1 / T2",px(s.target1)+" / "+px(s.target2)],["Last observation",s.price_as_of_ist],["Deadline",s.expires_at_ist],["Selector score",s.final_selector_score??s.score],["Counter-evidence",[s.why_not_higher,s.missing_confirmation].flat().filter(Boolean)[0]||"Not recorded"]];
  if(s.shadow)fields.push(["Learning forecast (shadow)",(s.shadow.direction||"Insufficient evidence")+" | "+s.shadow.examples+" examples across "+s.shadow.sessions+" earlier sessions"]);
@@ -116,7 +117,39 @@ function paintStockQuote(){
  const message=q?px(q.price)+" | "+stockMove(q)+" vs previous close"+(q.previous_close?" "+px(q.previous_close):"")+" | "+q.status+" | "+indexStamp.format(q.epoch*1000)+" IST":"No timestamped stock quote available.";
  if(box.textContent!==message)box.textContent=message;
 }
+function entryRead(s,q,now){
+ const sign=direction(s)==="Bullish"?1:direction(s)==="Bearish"?-1:0;
+ const e=Number(s.trigger_price),t=Number(s.target1),sl=Number(s.stop_loss);
+ if(s.setup_state==="CLOSED"||s.expires_epoch<=now)return ["Expired or closed","No new entry."];
+ if(s.scanner_band==="avoid")return ["Avoid",condition(s)];
+ const recorded=s.entered_at||s.setup_state==="ENTERED";
+ const valid=q&&(q.status==="live"||q.status==="simulated")&&now-q.epoch>=0&&now-q.epoch<=15&&q.price>0;
+ if(!valid||q.epoch<=s.publication_epoch)return ["Cannot verify entry now",recorded?"Entry previously recorded; current quote unavailable.":"Waiting for a fresh post-publication price."];
+ if(!(e>0&&t>0&&sl>0&&sign*(t-e)>0&&sign*(e-sl)>0))return ["Levels unavailable","No valid published entry, T1 and stop."];
+ const delta=sign*(q.price-e),room=sign*(t-q.price);
+ const math="Entry "+px(e)+"; latest "+px(q.price)+" ("+px(Math.abs(delta))+(delta>=0?" beyond":" short of")+" entry). Room to T1 "+px(Math.max(room,0))+"; planned risk "+px(Math.abs(e-sl))+" per share before costs.";
+ if(recorded)return ["Entry already recorded",math+" Tracking the original setup, not a fresh entry."];
+ if(room<=0)return ["Missed move",math+" T1 already reached at this quote."];
+ if(sign*(q.price-sl)<=0)return ["Beyond invalidation",math];
+ if(delta<0)return ["Wait for entry",condition(s)+". "+math];
+ return [q.has_book===false?"No verified bid/ask":"Trigger crossed; awaiting record",math];
+}
+function paintDecisions(){
+ const now=Date.now()/1000;
+ for(const s of setups){
+ const [state,reason]=entryRead(s,ticker[s.symbol],now);
+ const row=document.querySelector('[data-decision="'+CSS.escape(s.symbol)+'"]');
+ if(row&&row.textContent!==state)row.textContent=state;
+ if(selected===s.symbol&&$("decisionText")){
+ const text=(s.setup_type?s.setup_type+". ":"")+state+". "+reason;if($("decisionText").textContent!==text)$("decisionText").textContent=text;
+ const n=deskData?.mover_sweep?.latest_news?.[s.symbol];
+ const note=n?"Reported context: "+n.title+" · "+n.publisher+" · "+deskStamp(n.published)+". Not a verified cause.":"No recent matching company news available.";
+ if($("decisionNews").textContent!==note)$("decisionNews").textContent=note;
+ }
+ }
+}
 function paintTicker(){
+ paintDecisions();
  paintStockQuote();
  document.querySelectorAll("[data-price]").forEach(el=>{
    const q=ticker[el.dataset.price];if(!q||q.epoch<scanStarted)return;
@@ -162,7 +195,7 @@ async function updateStrip(){
 }
 if(!isHistory){
  $("marketStrip").hidden=false;paintQuotes(["NIFTY 50","SENSEX","BANK NIFTY"].map(name=>({name,status:"unavailable"})));
- connectQuoteStream();updateStrip();setInterval(updateStrip,1000);
+ connectQuoteStream();updateStrip();setInterval(()=>{updateStrip();if(!document.hidden)paintDecisions()},1000);
  document.addEventListener("visibilitychange",()=>{
    if(document.hidden){quoteStream?.close();quoteStream=null;streamReady=false}
    else{connectQuoteStream();updateStrip()}

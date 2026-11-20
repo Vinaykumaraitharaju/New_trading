@@ -104,6 +104,13 @@ async function loadEditions(){
  r.minutes+' min',r.hits+' / '+r.stops,r.timed,r.missing+' / '+r.tracking,r.late,r.paired+' / '+r.sessions,r.avg_net_bps==null?'Not measured':esc(r.avg_net_bps)+' bps'
  ]),'No new timed entries measured yet.')+'<small>Net return compares only entries with verified bid/ask exits for all three horizons, less an assumed 10 bps round trip. Not actual fees or fills. Entries without 30 minutes before close are excluded from comparison.</small>';
  }
+ const study=d.mover_sweep?.news_trial;
+ if(compare&&study){
+ const fmt=v=>v==null?'Not measured':Number(v).toFixed(1)+' bps';
+ $("horizonTrials").insertAdjacentHTML("beforeend",'<h2>Does news improve the forecast?</h2><p>Fixed eight-stock watchlist · Morning observation to first fresh quote after 15:00 IST · Shadow only</p>'+
+ table(['Paired outcomes','Sessions','News changed direction','Missing past outcomes','Price alone','Price + news'],[[study.measured,study.sessions,study.changed,study.missing,fmt(study.price_net),fmt(study.news_net)]],'')+
+ '<small>Mean simulated return after an assumed 10 bps per directional call; flat calls earn zero. Spread, slippage and actual fees are not modeled. No automatic promotion.</small>');
+ }
  const old=$("editionSlot").value;deskData=d;
  paintMovers(d.daily_movers,d.mover_sweep);
  const options=isHistory?(d.editions||[]).map(e=>({slot:e.slot,phase:'Archived'})):(d.schedule?.slots||[]);

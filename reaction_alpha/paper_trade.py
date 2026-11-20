@@ -332,6 +332,8 @@ class PaperTradeBook:
                 setup["expires_at_ist"] = indian_time(existing["expires_at"])
                 setup["shadow"] = ctx.get("shadow")
                 setup.update(setup_id=existing["id"], setup_state=existing["state"],
+                             expires_epoch=datetime.fromisoformat(existing["expires_at"]).timestamp(),
+                             publication_epoch=datetime.fromisoformat(existing["created_at"]).timestamp(),
                              expires_at=existing["expires_at"], published_at=existing["created_at"],
                              entered_at=existing["entered_at"], price_as_of=existing["updated_at"],
                              stop_loss=existing["stop_loss"], target1=existing["target1"], target2=existing["target2"])

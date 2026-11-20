@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 import requests
 from data.stock_news import _normalize_text, _query_text
 from .market_strip import IST
+from .news_trial import WATCH
 
 
 EVENTS = [
@@ -58,10 +59,17 @@ class MoverNews:
     def step(self,names,now):
         day=datetime.fromtimestamp(now,IST).date().isoformat()
         with sqlite3.connect(self.path) as db:
+            db.execute("""CREATE TABLE IF NOT EXISTS watch_news_check(day TEXT,symbol TEXT,checked REAL,
+                PRIMARY KEY(day,symbol))""")
             db.execute("""INSERT OR IGNORE INTO mover_news_v1 SELECT day,symbol,checked,0,'Queued','[]'
                 FROM mover_sweep_v1 WHERE day=? AND (high>=round(close*1.04,8) OR low<=round(close*.96,8))""",(day,))
             row=db.execute("""SELECT symbol FROM mover_news_v1 WHERE day=? AND checked<?
                 ORDER BY checked,detected,symbol LIMIT 1""",(day,now-1800)).fetchone()
+            db.executemany("INSERT OR IGNORE INTO watch_news_check VALUES (?,?,0)",[(day,s) for s in WATCH])
+            watch=db.execute("""SELECT symbol FROM watch_news_check WHERE day=? AND checked<?
+                ORDER BY checked,symbol LIMIT 1""",(day,now-1800)).fetchone()
+            if watch:
+                row=watch
         if not row:
             return 15
         symbol=row[0]
@@ -80,6 +88,7 @@ class MoverNews:
             status="News feed unavailable"
             delay=90
         with sqlite3.connect(self.path) as db:
+            db.execute("UPDATE watch_news_check SET checked=? WHERE day=? AND symbol=?",(checked,day,symbol))
             db.executemany("INSERT OR IGNORE INTO mover_news_evidence_v1 VALUES (?,?,?,?,?,?,?)",
                 [(symbol,a["url"],checked,a["published"],a["kind"],a["title"],a["publisher"]) for a in items or []])
             db.execute("UPDATE mover_news_v1 SET checked=?,status=?,items=coalesce(?,items) WHERE day=? AND symbol=?",
