@@ -137,13 +137,15 @@ function moverReason(n){
 function paintMovers(d,sweep){
  const box=$("dailyMovers");if(!d){box.hidden=true;return}
  const expanded=box.querySelector('details')?.open;
+ const previous=box.querySelector('.eq-discovery-scroll');
+ const top=previous?.scrollTop||0,left=previous?.scrollLeft||0,focused=previous===document.activeElement;
  box.hidden=false;
  box.innerHTML='<h2>Today’s ±4% movers</h2>'+
  (sweep?'<h3>NSE EQ discovery</h3><p>'+esc(sweep.covered)+' stocks verified today / '+esc(sweep.universe||"unknown")+' in broker universe · '+esc(sweep.status)+'</p>'+
- table(['Stock','Reached today','Latest snapshot','Quote as of (IST)','Why this move?'],sweep.movers.map(r=>[esc(r.symbol),
+ '<div class="eq-discovery-scroll" role="region" aria-label="NSE EQ discovery stocks" tabindex="0">'+table(['Stock','Reached today','Latest snapshot','Quote as of (IST)','Why this move?'],sweep.movers.map(r=>[esc(r.symbol),
  [r.up?'High '+esc(signedFmt.format(r.high_pct))+'%':'',r.down?'Low '+esc(signedFmt.format(r.low_pct))+'%':''].filter(Boolean).join(' / '),
  px(r.price)+' ('+esc(signedFmt.format(r.current_pct))+'%)',esc(deskStamp(r.trade)),moverReason(r.news)]),sweep.covered?'No threshold reached in verified coverage.':'No dated EQ snapshots verified yet.')+
- '<p class="desk-caption">Session highs and lows can reveal an earlier move. Exact touch time and news cause are unknown.</p>':'')+
+ '</div><p class="desk-caption">Session highs and lows can reveal an earlier move. Exact touch time and news cause are unknown.</p>':'')+
  '<h3>Live research sample</h3><p class="desk-caption">'+esc(d.day)+' IST · '+esc(d.covered)+' monitored stocks with a verified reference close · First observed touches, not closing returns</p>'+
  table(['Stock','First move','At touch / previous close','Market context','Company evidence'],d.movers.map(r=>{
  const f=r.filing;
@@ -155,4 +157,6 @@ function paintMovers(d,sweep){
  '<details '+(expanded?'open':'')+'><summary>Before the move: research forecasts</summary><p>First observed stock move and half-hour compared with earlier sessions. '+esc(d.training_examples)+' eligible historical examples. No live ranking changes.</p><p>Measured prior forecasts: '+esc(d.paired)+'. Model correct: '+esc(d.correct)+'. Always predict neither: '+esc(d.neither_correct)+'. Incomplete coverage can bias these counts.</p>'+
  table(['Stock','Observed at start','Shadow forecast','Earlier examples','Measured outcome'],d.forecasts.map(r=>[esc(r.symbol),esc(signedFmt.format(r.start_pct))+'%<small>'+esc(deskStamp(r.start))+'</small>',
  esc(r.prediction||'Insufficient evidence'),Object.entries(r.prior_counts).map(([k,v])=>esc(k)+': '+esc(v)).join(', ')||'None',esc(r.outcome||'Not measured')]),'No pre-threshold observations yet.')+'</details>';
+ const region=box.querySelector('.eq-discovery-scroll');
+ if(region&&previous){region.scrollTo(left,top);if(focused)region.focus({preventScroll:true})}
 }

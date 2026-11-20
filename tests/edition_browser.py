@@ -71,6 +71,16 @@ def run():
             expect(page.locator("#editionReport")).to_contain_text("Frozen at publication")
             expect(page.locator("#dailyMovers")).to_contain_text("Already beyond threshold")
             expect(page.locator("#dailyMovers")).to_contain_text("No verified company-specific cause")
+            assert page.evaluate("""d => {
+              const movers=Array.from({length:100},(_,i)=>({symbol:'EQ'+i,up:true,high_pct:5,current_pct:4,price:100,trade:1}));
+              const sweep={covered:100,universe:100,status:'test',movers};
+              const region=()=>document.querySelector('.eq-discovery-scroll');
+              paintMovers(d,sweep);region().scrollTop=240;paintMovers(d,sweep);
+              const ok=region().scrollTop===240 && region().clientHeight<=innerHeight/2 &&
+                getComputedStyle(region().querySelector('th')).position==='sticky' &&
+                document.documentElement.scrollWidth<=innerWidth;
+              paintMovers(d,null);return ok;
+            }""", data["daily_movers"])
             states=page.evaluate("""async () => {
               const now=Math.floor(Date.now()/1000);
               const s={symbol:'SAMPLE',side:'LONG',trigger_price:505,stop_loss:500,target1:512,setup_type:'Breakout'};
