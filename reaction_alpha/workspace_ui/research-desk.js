@@ -120,15 +120,22 @@ async function loadEditions(){
  }finally{editionBusy=false}
 }
 
+function moverReason(n){
+ if(!n||!n.checked)return 'News lookup queued';
+ const items=(n.items||[]).filter(a=>/^https:\/\//i.test(a.url));
+ return '<b>'+esc(n.status)+'</b><small>Checked '+esc(deskStamp(n.checked))+'</small>'+items.map(a=>
+ '<small>'+esc(a.kind)+' · <a target="_blank" rel="noopener noreferrer" href="'+esc(a.url)+'">'+esc(a.title)+'</a> · '+esc(a.publisher)+
+ ' · Published '+esc(deskStamp(a.published))+' · '+(a.published>n.detected?'After scanner detection':'Before scanner detection; exact move time unknown')+'</small>').join('');
+}
 function paintMovers(d,sweep){
  const box=$("dailyMovers");if(!d){box.hidden=true;return}
  const expanded=box.querySelector('details')?.open;
  box.hidden=false;
  box.innerHTML='<h2>Today’s ±4% movers</h2>'+
  (sweep?'<h3>NSE EQ discovery</h3><p>'+esc(sweep.covered)+' stocks verified today / '+esc(sweep.universe||"unknown")+' in broker universe · '+esc(sweep.status)+'</p>'+
- table(['Stock','Reached today','Latest snapshot','Quote as of (IST)'],sweep.movers.map(r=>[esc(r.symbol),
+ table(['Stock','Reached today','Latest snapshot','Quote as of (IST)','Why this move?'],sweep.movers.map(r=>[esc(r.symbol),
  [r.up?'High '+esc(signedFmt.format(r.high_pct))+'%':'',r.down?'Low '+esc(signedFmt.format(r.low_pct))+'%':''].filter(Boolean).join(' / '),
- px(r.price)+' ('+esc(signedFmt.format(r.current_pct))+'%)',esc(deskStamp(r.trade))]),sweep.covered?'No threshold reached in verified coverage.':'No dated EQ snapshots verified yet.')+
+ px(r.price)+' ('+esc(signedFmt.format(r.current_pct))+'%)',esc(deskStamp(r.trade)),moverReason(r.news)]),sweep.covered?'No threshold reached in verified coverage.':'No dated EQ snapshots verified yet.')+
  '<p class="desk-caption">Session highs and lows can reveal an earlier move. Exact touch time and news cause are unknown.</p>':'')+
  '<h3>Live research sample</h3><p class="desk-caption">'+esc(d.day)+' IST · '+esc(d.covered)+' monitored stocks with a verified reference close · First observed touches, not closing returns</p>'+
  table(['Stock','First move','At touch / previous close','Market context','Company evidence'],d.movers.map(r=>{

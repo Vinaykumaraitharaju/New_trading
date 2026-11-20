@@ -21,6 +21,14 @@ guessed. Published deadlines are evaluation windows, not estimated arrival times
 
 ## Implemented Evidence
 
+The mover sweep queues free Google News RSS searches separately from quote
+collection. The "Why this move?" column shows up to two matching event headlines
+from the past seven days with publisher, publication time, lookup status and
+links. Results are retrospective, may be delayed or incomplete, and are not
+proof of causation. Scanner detection time is not the exact threshold touch.
+The SQLite cache survives restart. Headlines are not used as prediction labels
+or live score boosts. No paid provider, API key, or extra broker login is needed.
+
 History > Performance compares 10/20/30 minutes from the **same recorded timed
 entry**. The original publication deadlines and 30-minute direction scorecard
 are unchanged. The first post-entry verified trade touching T1 or stop before

@@ -156,6 +156,8 @@ class ReactionAlphaService:
             self.editions = TimedEditions(self.config.paper_trade_db_path)
             self.movers = DailyMovers(self.config.paper_trade_db_path)
             self.mover_sweep = MoverSweep(self.config.paper_trade_db_path)
+            threading.Thread(target=self.mover_sweep.news.run,args=(self._stop_event,self.mover_sweep),
+                             daemon=True,name="mover-news").start()
             threading.Thread(target=self.mover_sweep.run,args=(self._stop_event,lambda: self._router.kotak if self._router else None),
                              daemon=True,name="eq-mover-sweep").start()
             threading.Thread(target=self.edition_context.run, args=(self._stop_event,),

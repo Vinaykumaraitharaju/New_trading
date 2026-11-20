@@ -4,6 +4,8 @@ from math import isfinite
 import sqlite3
 import time
 import logging
+import json
+from .mover_news import MoverNews
 
 from .market_strip import IST, session
 
@@ -42,6 +44,8 @@ class MoverSweep:
         self.path = path
         self.status = "Waiting for an open session and connected Kotak feed"
         self.total = 0
+        self.company_names = {}
+        self.news = MoverNews(path)
         with sqlite3.connect(path) as db:
             db.execute("""CREATE TABLE IF NOT EXISTS mover_sweep_v1(day TEXT,symbol TEXT,close REAL,high REAL,low REAL,
                 price REAL,trade REAL,checked REAL,PRIMARY KEY(day,symbol))""")
@@ -63,6 +67,9 @@ class MoverSweep:
             db.executemany("""INSERT INTO mover_sweep_v1 VALUES (?,?,?,?,?,?,?,?) ON CONFLICT(day,symbol)
                 DO UPDATE SET high=excluded.high, low=excluded.low,price=excluded.price,close=excluded.close,
                 trade=excluded.trade,checked=excluded.checked WHERE excluded.trade>=trade""",batch)
+            db.executemany("""INSERT OR IGNORE INTO mover_news_v1(day,symbol,detected,checked,status,items)
+                VALUES (?,?,?,0,'Queued','[]')""",
+                [(d,s,checked) for d,s,c,h,l,_,_,checked in batch if h>=round(c*1.04,8) or l<=round(c*.96,8)])
         return len(batch)
 
     def report(self,now):
@@ -75,6 +82,11 @@ class MoverSweep:
                 high>=round(close*1.04,8) AS up,low<=round(close*.96,8) AS down FROM mover_sweep_v1
                 WHERE day=? AND (high>=round(close*1.04,8) OR low<=round(close*.96,8))
                 ORDER BY max(abs(high_pct),abs(low_pct)) DESC,symbol""",(day,))]
+            news={r["symbol"]:dict(status=r["status"],checked=r["checked"],detected=r["detected"],
+                                   items=json.loads(r["items"])) for r in db.execute(
+                "SELECT * FROM mover_news_v1 WHERE day=?",(day,))}
+            for r in moves:
+                r["news"]=news.get(r["symbol"])
         return dict(universe=self.total,covered=n,status=self.status,movers=moves)
 
     def run(self,stop,get_feed):
@@ -90,7 +102,11 @@ class MoverSweep:
                 else:
                     today=datetime.fromtimestamp(now,IST).date()
                     if today!=day:
-                        instruments=eq_universe(feed.scrip_master("nse_cm"))
+                        master=feed.scrip_master("nse_cm")
+                        instruments=eq_universe(master)
+                        self.company_names={str(r["trading_symbol"]).strip().upper().removesuffix("-EQ"):
+                            str(r.get("pDesc") or r.get("company_name") or "").strip()
+                            for r in master.to_dict("records")}
                         names=sorted(instruments)
                         if not names:
                             raise ValueError("Empty NSE EQ universe")
